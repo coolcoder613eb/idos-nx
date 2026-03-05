@@ -5,10 +5,14 @@ use core::marker::ConstParamTy;
 
 use self::cursor::Cursor;
 use crate::{
-    console::graphics::{font::Font, framebuffer::Framebuffer, Region},
+    console::graphics::{font::Font, framebuffer::Framebuffer, Region, DESKTOP_BG},
     memory::address::VirtualAddress,
 };
 
+use super::decor;
+use super::hit::HitMap;
+use super::topbar::{self, TopBarState, TOP_BAR_HEIGHT};
+use super::ui::UiSurface;
 use super::ConsoleManager;
 
 #[derive(ConstParamTy, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +59,9 @@ pub struct Compositor<const COLOR_DEPTH: ColorDepth> {
     dirty_regions: Vec<Region>,
 
     windows: Vec<Window>,
+
+    pub hit_map: HitMap,
+    pub topbar_state: TopBarState,
 }
 
 impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
@@ -85,6 +92,9 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
             dirty_regions: Vec::new(),
 
             windows: Vec::new(),
+
+            hit_map: HitMap::new(),
+            topbar_state: TopBarState::new(),
         };
         compositor.draw_bg(Region {
             x: 0,
@@ -111,7 +121,7 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         for row in region.y..(region.y + region.height) {
             let offset = self.fb.stride as usize * row as usize;
             for col in region.x..(region.x + region.width) {
-                crate::console::graphics::write_pixel(buffer, offset + col as usize * bpp, 0x000000, bpp);
+                crate::console::graphics::write_pixel(buffer, offset + col as usize * bpp, DESKTOP_BG, bpp);
             }
         }
     }
@@ -124,6 +134,7 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         font: &F,
     ) {
         self.dirty_regions.clear();
+        self.hit_map.clear();
 
         if self.force_redraw {
             self.dirty_regions.push(Region {
@@ -132,9 +143,37 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
                 width: self.fb.width,
                 height: self.fb.height,
             });
+            self.topbar_state.needs_full_draw = true;
         }
 
-        // draw the top bar
+        // Draw the top bar via UiSurface
+        {
+            let screen_width = self.fb.width;
+            let stride = self.fb.stride as usize;
+            let bpp = COLOR_DEPTH.to_usize();
+            let scratch = unsafe {
+                core::slice::from_raw_parts_mut(
+                    self.scratch_buffer_vaddr.as_ptr_mut::<u8>(),
+                    self.scratch_buffer_size,
+                )
+            };
+            let mut surface = UiSurface::new(
+                scratch,
+                self.scratch_buffer_vaddr,
+                stride,
+                screen_width,
+                TOP_BAR_HEIGHT,
+                bpp,
+                &mut self.dirty_regions,
+            );
+            topbar::draw(
+                &mut surface,
+                &mut self.hit_map,
+                &mut self.topbar_state,
+                font,
+                screen_width,
+            );
+        }
 
         // draw any active windows
         self.draw_windows(conman, font);
@@ -160,9 +199,9 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         self.dirty_regions.push(region);
     }
 
-    pub fn draw_top_bar(&mut self) {}
-
     pub fn draw_windows<F: Font>(&mut self, conman: &ConsoleManager, font: &F) {
+        let window_y_offset = TOP_BAR_HEIGHT + 4; // 4px gap below top bar
+        let window_x_offset: u16 = 4;
         let Self {
             ref mut windows,
             ref mut dirty_regions,
@@ -173,10 +212,10 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
             .filter_map(|window| {
                 let console_index = window.console_index;
                 let mut sub_buffer = Framebuffer {
-                    width: self.fb.width - 5,
-                    height: self.fb.height - 29,
+                    width: self.fb.width - window_x_offset,
+                    height: self.fb.height - window_y_offset,
                     stride: self.fb.stride,
-                    buffer: self.scratch_buffer_vaddr + (29 * self.fb.stride as u32) + 5 * COLOR_DEPTH.to_usize() as u32,
+                    buffer: self.scratch_buffer_vaddr + (window_y_offset as u32 * self.fb.stride as u32) + window_x_offset as u32 * COLOR_DEPTH.to_usize() as u32,
                 };
 
                 let console = conman.consoles.get(console_index).unwrap();
@@ -186,37 +225,34 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
                 if new_width != window.last_width || new_height != window.last_height {
                     // window size changed, may need to redraw background
                     if new_width < window.last_width && new_height < window.last_height {
-                        // if we need to redraw the right and the bottom, might as well redraw the whole previous window area
                         draw_bg(
                             &mut sub_buffer,
                             COLOR_DEPTH,
                             Region {
                                 x: 0,
                                 y: 0,
-                                width: window.last_width + 4,
-                                height: window.last_height + 22,
+                                width: window.last_width + decor::DECOR_EXTRA_W,
+                                height: window.last_height + decor::DECOR_EXTRA_H,
                             },
                         );
                     } else if new_width < window.last_width {
-                        // redraw the right side
                         draw_bg(
                             &mut sub_buffer,
                             COLOR_DEPTH,
                             Region {
-                                x: new_width + 4,
+                                x: new_width + decor::DECOR_EXTRA_W,
                                 y: 0,
                                 width: window.last_width - new_width,
                                 height: new_height,
                             },
                         );
                     } else if new_height < window.last_height {
-                        // redraw the bottom side
                         draw_bg(
                             &mut sub_buffer,
                             COLOR_DEPTH,
                             Region {
                                 x: 0,
-                                y: new_height + 22,
+                                y: new_height + decor::DECOR_EXTRA_H,
                                 width: new_width,
                                 height: window.last_height - new_height,
                             },
@@ -238,8 +274,8 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
             })
             // remap dirty region to screen space
             .map(|r| Region {
-                x: r.x + 5,
-                y: r.y + 29,
+                x: r.x + window_x_offset,
+                y: r.y + window_y_offset,
                 width: r.width,
                 height: r.height,
             })
@@ -342,7 +378,7 @@ fn draw_bg(framebuffer: &mut Framebuffer, color_depth: ColorDepth, region: Regio
     for row in region.y..(region.y + region.height) {
         let offset = framebuffer.stride as usize * row as usize;
         for col in region.x..(region.x + region.width) {
-            crate::console::graphics::write_pixel(buffer, offset + col as usize * bpp, 0x000000, bpp);
+            crate::console::graphics::write_pixel(buffer, offset + col as usize * bpp, DESKTOP_BG, bpp);
         }
     }
 }

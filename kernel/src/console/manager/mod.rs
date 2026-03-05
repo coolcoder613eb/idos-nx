@@ -1,7 +1,8 @@
 pub mod compositor;
 pub mod decor;
+pub mod hit;
 pub mod topbar;
-pub mod window;
+pub mod ui;
 
 use crate::collections::SlotList;
 use crate::io::filesystem::install_task_dev;
@@ -115,7 +116,11 @@ impl ConsoleManager {
             return (640, 400, None);
         }
 
-        self::decor::draw_window_bar(fb, window_pos, 180, font, "C:\\COMMAND.ELF", bpp);
+        let content_y = decor::CONTENT_Y as usize;
+        let content_x = decor::CONTENT_X as usize;
+        let focused = true; // TODO: track focus per window
+
+        self::decor::draw_window_bar(fb, window_pos, 640, font, "C:\\COMMAND.ELF", focused, bpp);
 
         let (width, height) = if let Some(graphics_buffer) = &console.terminal.graphics_buffer {
             let width = graphics_buffer.width as usize;
@@ -131,7 +136,7 @@ impl ConsoleManager {
             // clear screen
             let buffer = fb.get_buffer_mut();
             for row in 0..height {
-                let offset = (20 + row) * fb.stride as usize + 2 * bpp;
+                let offset = (content_y + row) * fb.stride as usize + content_x * bpp;
                 for px in 0..width {
                     crate::console::graphics::write_pixel(buffer, offset + px * bpp, 0x000000, bpp);
                 }
@@ -143,7 +148,7 @@ impl ConsoleManager {
             let src_bpp = (graphics_buffer.bits_per_pixel + 7) / 8;
 
             for row in 0..copy_height {
-                let dest_offset = (20 + row) * fb.stride as usize + 2 * bpp;
+                let dest_offset = (content_y + row) * fb.stride as usize + content_x * bpp;
                 let src_offset = row * graphics_buffer.width as usize * src_bpp;
 
                 if src_bpp == bpp {
@@ -165,7 +170,7 @@ impl ConsoleManager {
             let height = 400;
             let buffer = fb.get_buffer_mut();
             for row in 0..height {
-                let offset = (20 + row) * fb.stride as usize + 2 * bpp;
+                let offset = (content_y + row) * fb.stride as usize + content_x * bpp;
                 for px in 0..width {
                     crate::console::graphics::write_pixel(buffer, offset + px * bpp, 0x000000, bpp);
                 }
@@ -180,8 +185,8 @@ impl ConsoleManager {
                 });
                 font.draw_colored_string(
                     fb,
-                    window_pos.x + 2,
-                    (window_pos.y + 20) + (row as u16 * 16),
+                    window_pos.x + content_x as u16,
+                    (window_pos.y + content_y as u16) + (row as u16 * 16),
                     colored_chars,
                     bpp,
                 );
@@ -189,7 +194,7 @@ impl ConsoleManager {
             (width, height)
         };
 
-        self::decor::draw_window_border(fb, window_pos, width as u16, height as u16, bpp);
+        self::decor::draw_window_border(fb, window_pos, width as u16, height as u16, focused, bpp);
 
         (
             width as u16,
@@ -197,8 +202,8 @@ impl ConsoleManager {
             Some(Region {
                 x: window_pos.x,
                 y: window_pos.y,
-                width: width as u16 + 4,
-                height: height as u16 + 22,
+                width: width as u16 + decor::DECOR_EXTRA_W,
+                height: height as u16 + decor::DECOR_EXTRA_H,
             }),
         )
     }

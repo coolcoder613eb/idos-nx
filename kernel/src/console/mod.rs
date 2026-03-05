@@ -3,7 +3,6 @@ use core::sync::atomic::Ordering;
 use idos_api::io::AsyncOp;
 
 use crate::conman::{register_console_manager, InputBuffer};
-use crate::console::graphics::font::psf::PsfFont;
 use crate::console::graphics::font::Font;
 use crate::graphics::{get_vbe_mode_info, set_display_start_point, set_vbe_mode, VbeModeInfo};
 use crate::io::async_io::ASYNC_OP_READ;
@@ -132,9 +131,21 @@ pub fn manager_task() -> ! {
 
     compositor.add_window(con1);
 
+    // Set initial window name
+    compositor.topbar_state.set_window_name(b"C:\\COMMAND.ELF");
+
+    // Initialize clock
+    {
+        let dt = crate::time::system::Timestamp::now().to_datetime();
+        dt.time.print_short_to_buffer(&mut compositor.topbar_state.clock_text);
+    }
+    let mut last_clock_update = crate::time::system::get_monotonic_ms();
+
     let mut last_action_type: u8 = 0;
     let mut prev_mouse_x = mouse_x;
     let mut prev_mouse_y = mouse_y;
+    let mut prev_hover: Option<manager::hit::HitTarget> = None;
+    let mut mouse_left_was_down = false;
     loop {
         let frame_start = crate::time::system::get_monotonic_ms();
 
@@ -157,6 +168,7 @@ pub fn manager_task() -> ! {
             }
         }
 
+        let mut mouse_left_down = false;
         loop {
             let next_mouse_byte = match mouse_buffer.read() {
                 Some(byte) => byte,
@@ -170,6 +182,7 @@ pub fn manager_task() -> ! {
                 }
             } else if mouse_read_index == 3 {
                 // we have a complete mouse packet
+                mouse_left_down = mouse_read[0] & 0x01 != 0;
                 let mut dx = mouse_read[1] as u32;
                 let mut dy = mouse_read[2] as u32;
                 if mouse_read[0] & 0x10 != 0 {
@@ -198,6 +211,23 @@ pub fn manager_task() -> ! {
             }
         }
 
+        // Mouse hover/click handling
+        let current_hover = compositor.hit_map.test(mouse_x as u16, mouse_y as u16);
+        if current_hover != prev_hover {
+            compositor.topbar_state.hover = current_hover;
+            prev_hover = current_hover;
+        }
+
+        // Detect left click (rising edge: was up, now down)
+        let mouse_left_clicked = mouse_left_down && !mouse_left_was_down;
+        mouse_left_was_down = mouse_left_down;
+
+        if mouse_left_clicked {
+            if let Some(manager::hit::HitTarget::DesktopTab(n)) = current_hover {
+                compositor.topbar_state.active_desktop = n;
+            }
+        }
+
         if message_read.is_complete() {
             let sender = TaskID::new(message_read.return_value.load(Ordering::SeqCst));
             let request_id = incoming_message.unique_id;
@@ -213,6 +243,14 @@ pub fn manager_task() -> ! {
                 0,
             );
             let _ = send_io_op(messages_handle, &message_read, Some(wake_set));
+        }
+
+        // Update clock every ~10 seconds
+        let now_ms = crate::time::system::get_monotonic_ms();
+        if now_ms - last_clock_update >= 10_000 {
+            let dt = crate::time::system::Timestamp::now().to_datetime();
+            dt.time.print_short_to_buffer(&mut compositor.topbar_state.clock_text);
+            last_clock_update = now_ms;
         }
 
         // Check if any console is in graphics mode
@@ -281,88 +319,3 @@ fn start_command(console_index: usize) -> Handle {
 
     task_handle
 }
-
-fn draw_desktop(framebuffer: &Framebuffer, font: &PsfFont) {
-    const TOP_BAR_HEIGHT: usize = 24;
-    let display_width: usize = framebuffer.width as usize;
-    let display_height: usize = framebuffer.height as usize;
-
-    let raw_buffer = framebuffer.get_buffer_mut();
-
-    // draw the top bar
-    for y in 0..(TOP_BAR_HEIGHT - 2) {
-        let offset = y * display_width;
-        for x in 0..display_width {
-            raw_buffer[offset + x] = 0x12;
-        }
-    }
-    for x in 0..display_width {
-        raw_buffer[display_width * (TOP_BAR_HEIGHT - 2) + x] = 0x5b;
-    }
-    for x in 0..display_width {
-        raw_buffer[display_width * (TOP_BAR_HEIGHT - 1) + x] = 0x5b;
-    }
-
-    let topbar_text_y = (TOP_BAR_HEIGHT - 2 - font.get_height() as usize) / 2;
-    font.draw_string(
-        framebuffer,
-        10,
-        topbar_text_y as u16,
-        "IDOS-NX".bytes(),
-        0xFFFFFF,
-        1,
-    );
-    // clear the rest of the desktop
-
-    for y in TOP_BAR_HEIGHT..display_height {
-        let offset = y * display_width;
-        for x in 0..display_width {
-            raw_buffer[offset + x] = 0x14;
-        }
-    }
-}
-
-fn draw_mouse(framebuffer: &mut Framebuffer, mouse_x: u32, mouse_y: u32) {
-    let fb_width = framebuffer.width as usize;
-    let offset = mouse_y as usize * fb_width + mouse_x as usize;
-    let fb_raw = framebuffer.get_buffer_mut();
-
-    let total_rows = 16.min(framebuffer.height as u32 - mouse_y) as usize;
-    let total_cols = 16.min(framebuffer.width as u32 - mouse_x) as usize;
-    for row in 0..total_rows {
-        let row_offset = offset + row * fb_width;
-        let mut cursor_row = CURSOR[row];
-        let mut shadow = false;
-        for col in 0..total_cols {
-            if cursor_row & 1 != 0 {
-                shadow = true;
-                fb_raw[row_offset + col] = 0x0f;
-            } else if shadow {
-                shadow = false;
-                fb_raw[row_offset + col] = 0x13;
-            } else {
-                shadow = false;
-            }
-            cursor_row = cursor_row >> 1;
-        }
-    }
-}
-
-const CURSOR: [u16; 16] = [
-    0b0000000000000001,
-    0b0000000000000011,
-    0b0000000000000111,
-    0b0000000000001111,
-    0b0000000000011111,
-    0b0000000000111111,
-    0b0000000001111111,
-    0b0000000011111111,
-    0b0000000111111111,
-    0b0000001111111111,
-    0b0000011111111111,
-    0b0000000001111111,
-    0b0000000001100111,
-    0b0000000001100011,
-    0b0000000011000001,
-    0b0000000011000000,
-];

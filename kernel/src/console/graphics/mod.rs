@@ -8,6 +8,19 @@ pub const COLOR_WHITE: u32 = 0xFFFFFF;
 pub const COLOR_GRAY: u32 = 0x606060;
 pub const COLOR_DARK_GRAY: u32 = 0x404040;
 
+// Theme palette
+pub const BAR_BG: u32 = 0x1a1a2e;
+pub const BAR_TEXT: u32 = 0xc8c8d0;
+pub const DESKTOP_BG: u32 = 0x2a2a3a;
+pub const WIN_BORDER: u32 = 0x5a5a6e;
+pub const WIN_TITLEBAR: u32 = 0x3a3a50;
+pub const WIN_TITLEBAR_ACTIVE: u32 = 0x4a4a6a;
+pub const WIN_TITLE_TEXT: u32 = 0xe0e0e8;
+pub const WIN_BODY_BG: u32 = 0x0c0c14;
+pub const ACCENT: u32 = 0x6a7abb;
+pub const ACCENT_ACTIVE: u32 = 0xe8ecff;
+pub const DESKTOP_HOVER_BG: u32 = 0x3a3a50;
+
 #[inline]
 pub fn write_pixel(buffer: &mut [u8], offset: usize, color: u32, bytes_per_pixel: usize) {
     match bytes_per_pixel {
