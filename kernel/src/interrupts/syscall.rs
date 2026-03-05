@@ -145,6 +145,11 @@ fn log_syscall(registers: &FullSavedRegisters) {
         0x40 => "get monotonic ms",
         0x41 => "get system time",
         0x50 => "register filesystem",
+        0x51 => "register device",
+        0x52 => "register network device",
+        0x60 => "query pci device",
+        0x61 => "enable pci bus master",
+        0x62 => "map dma memory",
         0xffff => "internal debug",
         _ => "unknown",
     };
@@ -472,6 +477,69 @@ pub extern "C" fn _syscall_inner(registers: &mut FullSavedRegisters) {
             registers.eax = ts.as_u32();
         }
 
+        0x60 => {
+            // query PCI device
+            // ebx = pointer to PciDeviceQuery struct
+            // Returns eax = 0 on success, 0xffff_ffff if not found
+            let query_ptr = registers.ebx as *mut idos_api::syscall::pci::PciDeviceQuery;
+            let query = unsafe { &mut *query_ptr };
+            let devices = crate::hardware::pci::get_bus_devices();
+            let found = devices.iter().find(|dev| {
+                dev.vendor_id == query.vendor_id && dev.device_id == query.device_id
+            });
+            match found {
+                Some(dev) => {
+                    query.bus = dev.bus;
+                    query.device = dev.device;
+                    query.function = dev.function;
+                    query.irq = dev.irq.unwrap_or(0);
+                    for i in 0..6 {
+                        query.bar[i] = match dev.bar[i] {
+                            Some(bar) => bar.0,
+                            None => 0,
+                        };
+                    }
+                    registers.eax = 0;
+                }
+                None => {
+                    registers.eax = 0xffff_ffff;
+                }
+            }
+        }
+        0x61 => {
+            // enable PCI bus mastering
+            // ebx = bus, ecx = device, edx = function
+            let bus = registers.ebx as u8;
+            let device = registers.ecx as u8;
+            let function = registers.edx as u8;
+            use crate::hardware::pci::devices::PciDevice;
+            let dev = PciDevice::read_from_bus(bus, device, function);
+            dev.enable_bus_master();
+            registers.eax = 0;
+        }
+        0x62 => {
+            // map DMA memory (returns both vaddr and paddr)
+            // ebx = size
+            // Returns: eax = vaddr, ebx = paddr
+            let size = registers.ebx;
+            match map_memory(None, size, MemoryBacking::IsaDma) {
+                Ok(vaddr) => {
+                    match crate::task::paging::page_on_demand(vaddr) {
+                        Some(paddr) => {
+                            registers.eax = vaddr.into();
+                            registers.ebx = paddr.into();
+                        }
+                        None => {
+                            registers.eax = 0xffff_ffff;
+                        }
+                    }
+                }
+                Err(_e) => {
+                    registers.eax = 0xffff_ffff;
+                }
+            }
+        }
+
         0x50 => {
             // register filesystem driver
             // ebx = pointer to name string, ecx = name length
@@ -483,6 +551,34 @@ pub extern "C" fn _syscall_inner(registers: &mut FullSavedRegisters) {
             let caller_id = crate::task::switching::get_current_id();
             let driver_id = crate::io::filesystem::install_task_fs(name, caller_id);
             registers.eax = *driver_id;
+        }
+        0x51 => {
+            // register device driver
+            // ebx = pointer to name string, ecx = name length
+            let name_ptr = registers.ebx as *const u8;
+            let name_len = registers.ecx as usize;
+            let name = unsafe {
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(name_ptr, name_len))
+            };
+            let caller_id = crate::task::switching::get_current_id();
+            let driver_id = crate::io::filesystem::install_task_dev(name, caller_id, 0);
+            registers.eax = *driver_id;
+        }
+        0x52 => {
+            // register network device
+            // ebx = path_ptr, ecx = path_len, edx = mac_ptr (6 bytes)
+            let path_ptr = registers.ebx as *const u8;
+            let path_len = registers.ecx as usize;
+            let mac_ptr = registers.edx as *const u8;
+            let path = unsafe {
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, path_len))
+            };
+            let mac: [u8; 6] = unsafe {
+                let slice = core::slice::from_raw_parts(mac_ptr, 6);
+                [slice[0], slice[1], slice[2], slice[3], slice[4], slice[5]]
+            };
+            crate::net::resident::register_network_device(path, mac);
+            registers.eax = 0;
         }
 
         0xffff => {

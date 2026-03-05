@@ -1,6 +1,7 @@
 pub mod exec;
 pub mod io;
 pub mod memory;
+pub mod pci;
 pub mod time;
 
 use core::arch::asm;

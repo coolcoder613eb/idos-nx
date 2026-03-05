@@ -110,8 +110,8 @@ fn init_system() -> ! {
         logger.log("Warning: no directives found in DRIVERS.CFG, using defaults\n");
         // Fallback: run the old hardcoded sequence for everything after C:\ mount
         hardware::floppy::install();
-        hardware::ethernet::dev::install_driver();
-        net::start_net_stack();
+        //hardware::ethernet::dev::install_driver();
+        //net::start_net_stack();
         io::filesystem::fatfs::mount_fat_fs_single("A", "FD1");
         graphics::register_graphics_driver("C:\\GFX.ELF");
         console::init_console();
@@ -151,10 +151,6 @@ fn execute_directive(logger: &mut log::BufferedLogger, directive: &config::Direc
                     logger.log("Installing Floppy Drivers...\n");
                     hardware::floppy::install();
                 }
-                "ethernet" => {
-                    logger.log("Installing Network Device Drivers...\n");
-                    hardware::ethernet::dev::install_driver();
-                }
                 _ => {
                     logger.log("Unknown driver: ");
                     logger.log(name.as_str());
@@ -163,37 +159,90 @@ fn execute_directive(logger: &mut log::BufferedLogger, directive: &config::Direc
             }
         }
         Directive::Pci {
-            vendor_id: _,
-            device_id: _,
-            path: _,
-            busmaster: _,
+            vendor_id,
+            device_id,
+            path,
+            busmaster,
         } => {
-            // PCI userspace driver launching will be implemented when we have
-            // a userspace ELF that uses the PCI syscalls
-            logger.log("PCI directive: not yet implemented\n");
+            use crate::hardware::pci::{devices::PciDevice, get_bus_devices};
+            use crate::task::actions::handle::{create_pipe_handles, create_task, transfer_handle};
+            use crate::task::actions::io::{close_sync, read_sync, write_sync};
+            use idos_api::syscall::pci::PciDeviceQuery;
+
+            logger.log("PCI driver: ");
+            logger.log(path.as_str());
+            logger.log("\n");
+
+            let devices = get_bus_devices();
+            let found = devices
+                .iter()
+                .find(|dev| dev.vendor_id == *vendor_id && dev.device_id == *device_id);
+            let pci_dev = match found {
+                Some(dev) => dev.clone(),
+                None => {
+                    logger.log("  PCI device not found\n");
+                    return;
+                }
+            };
+
+            if *busmaster {
+                let dev = PciDevice::read_from_bus(pci_dev.bus, pci_dev.device, pci_dev.function);
+                dev.enable_bus_master();
+            }
+
+            // Build PciDeviceQuery to send to the driver
+            let mut query = PciDeviceQuery::new(*vendor_id, *device_id);
+            query.bus = pci_dev.bus;
+            query.device = pci_dev.device;
+            query.function = pci_dev.function;
+            query.irq = pci_dev.irq.unwrap_or(0);
+            for i in 0..6 {
+                query.bar[i] = match pci_dev.bar[i] {
+                    Some(bar) => bar.0,
+                    None => 0,
+                };
+            }
+
+            let (args_reader, args_writer) = create_pipe_handles();
+            let (response_reader, response_writer) = create_pipe_handles();
+
+            let (_, driver_task) = create_task();
+            transfer_handle(args_reader, driver_task);
+            transfer_handle(response_writer, driver_task);
+
+            crate::exec::exec_program(driver_task, path.as_str()).unwrap();
+
+            // Send PciDeviceQuery to the driver
+            let query_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &query as *const PciDeviceQuery as *const u8,
+                    core::mem::size_of::<PciDeviceQuery>(),
+                )
+            };
+            let _ = write_sync(args_writer, query_bytes, 0);
+            let _ = close_sync(args_writer);
+
+            // Wait for ready signal
+            let _ = read_sync(response_reader, &mut [0u8], 0);
+            let _ = close_sync(response_reader);
         }
         Directive::Mount {
             drive_letter,
             fs_type,
             device,
-        } => {
-            match fs_type.as_str() {
-                "FAT" => {
-                    logger.log("Mounting ");
-                    logger.log(drive_letter.as_str());
-                    logger.log(":\\ ...\n");
-                    io::filesystem::fatfs::mount_fat_fs_single(
-                        drive_letter.as_str(),
-                        device.as_str(),
-                    );
-                }
-                _ => {
-                    logger.log("Unknown filesystem type: ");
-                    logger.log(fs_type.as_str());
-                    logger.log("\n");
-                }
+        } => match fs_type.as_str() {
+            "FAT" => {
+                logger.log("Mounting ");
+                logger.log(drive_letter.as_str());
+                logger.log(":\\ ...\n");
+                io::filesystem::fatfs::mount_fat_fs_single(drive_letter.as_str(), device.as_str());
             }
-        }
+            _ => {
+                logger.log("Unknown filesystem type: ");
+                logger.log(fs_type.as_str());
+                logger.log("\n");
+            }
+        },
         Directive::Graphics(path) => {
             logger.log("Initializing Graphics Driver...\n");
             graphics::register_graphics_driver(path.as_str());

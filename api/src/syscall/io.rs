@@ -1,7 +1,7 @@
 use crate::io::handle::Handle;
 use crate::io::AsyncOp;
 
-use super::syscall;
+use super::{syscall, syscall_2};
 
 pub fn create_message_queue_handle() -> Handle {
     Handle::new(syscall(0x21, 0, 0, 0))
@@ -46,4 +46,21 @@ pub fn append_io_op(handle: Handle, async_op: &AsyncOp, wait_set: Option<Handle>
         async_op as *const AsyncOp as u32,
         wait_set.map(|h| h.as_u32()).unwrap_or(0xffff_ffff),
     )
+}
+
+pub fn open_irq_handle(irq: u8) -> Handle {
+    Handle::new(syscall(0x22, irq as u32, 0, 0))
+}
+
+pub fn create_pipe_handles() -> (Handle, Handle) {
+    let (read_handle, write_handle) = syscall_2(0x24, 0, 0, 0);
+    (Handle::new(read_handle), Handle::new(write_handle))
+}
+
+pub fn register_dev(name: &str) -> u32 {
+    syscall(0x51, name.as_ptr() as u32, name.len() as u32, 0)
+}
+
+pub fn register_network_device(path: &str, mac: &[u8; 6]) {
+    syscall(0x52, path.as_ptr() as u32, path.len() as u32, mac.as_ptr() as u32);
 }

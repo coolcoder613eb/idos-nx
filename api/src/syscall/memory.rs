@@ -42,6 +42,18 @@ pub fn map_memory_contiguous(size: u32) -> Result<u32, ()> {
     }
 }
 
+/// Allocate a region of physically contiguous DMA memory, returning both
+/// the virtual address and the physical address. This is needed by device
+/// drivers that must program hardware with physical addresses for DMA.
+pub fn map_dma_memory(size: u32) -> Result<(u32, u32), ()> {
+    let (vaddr, paddr) = super::syscall_2(0x62, size, 0, 0);
+    if vaddr == 0xffff_ffff {
+        Err(())
+    } else {
+        Ok((vaddr, paddr))
+    }
+}
+
 pub fn unmap_memory(address: u32, size: u32) -> Result<(), ()> {
     let result = syscall(0x32, address, size, 0);
     if result == 0xffff_ffff {

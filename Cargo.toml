@@ -14,6 +14,7 @@ members = [
   "components/programs/gfx",
   "components/programs/gopher",
   "components/programs/netcat",
+  "e1000",
   "fatdriver",
   "kernel",
   "libc",
