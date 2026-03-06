@@ -294,24 +294,39 @@ impl TcpConnection {
         }
     }
 
+    const MSS: usize = 1460;
+
     pub fn write(&mut self, data: &[u8]) -> Option<IoResult> {
         if !matches!(self.state, TcpState::Established) {
             return Some(Err(IoError::OperationFailed));
         }
 
-        let packet = TcpHeader::create_packet(
-            self.local_address,
-            self.local_port,
-            self.remote_address,
-            self.remote_port,
-            self.last_sequence_sent,
-            self.last_sequence_received,
-            TcpHeader::FLAG_ACK | TcpHeader::FLAG_PSH,
-            data,
-        );
-        self.last_sequence_sent += data.len() as u32;
+        let mut offset = 0;
+        while offset < data.len() {
+            let end = (offset + Self::MSS).min(data.len());
+            let chunk = &data[offset..end];
+            let is_last = end == data.len();
 
-        net_respond(self.remote_address, packet);
+            let flags = if is_last {
+                TcpHeader::FLAG_ACK | TcpHeader::FLAG_PSH
+            } else {
+                TcpHeader::FLAG_ACK
+            };
+
+            let packet = TcpHeader::create_packet(
+                self.local_address,
+                self.local_port,
+                self.remote_address,
+                self.remote_port,
+                self.last_sequence_sent,
+                self.last_sequence_received,
+                flags,
+                chunk,
+            );
+            self.last_sequence_sent += chunk.len() as u32;
+            net_respond(self.remote_address, packet);
+            offset = end;
+        }
 
         Some(Ok(data.len() as u32))
     }
