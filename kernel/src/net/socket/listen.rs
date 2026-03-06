@@ -1,6 +1,7 @@
 use core::sync::atomic::Ordering;
 
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::vec::Vec;
 use idos_api::io::error::{IoError, IoResult};
 
 use crate::task::map::get_task;
@@ -8,30 +9,102 @@ use crate::task::map::get_task;
 use super::{
     super::protocol::{
         ipv4::Ipv4Address,
-        packet::PacketHeader,
         tcp::{connection::TcpConnection, header::TcpHeader},
+        udp::create_datagram,
     },
     super::resident::net_respond,
     port::SocketPort,
     AsyncCallback, SocketId, SocketType,
 };
 
-pub struct UdpListener {}
+pub struct UdpListener {
+    port: SocketPort,
+}
 
 impl UdpListener {
     pub fn new(port: SocketPort) -> Self {
-        Self {}
+        Self { port }
     }
 
-    pub fn handle_packet(&self, remote_addr: Ipv4Address, remote_port: u16, data: &[u8]) {}
+    pub fn handle_packet(&self, _remote_addr: Ipv4Address, _remote_port: u16, _data: &[u8]) {}
 
     /// Block until the next packet is received on this UDP listener.
     /// If the packet is open, incoming reads will be queued up and can be
     /// immediately resolved. Otherwise, the method will return and the next
     /// incoming packet will use the async callback info to resolve the read
     /// operation.
-    pub fn read(&self, buffer: &mut [u8], callback: AsyncCallback) -> Option<IoResult> {
+    pub fn read(&self, _buffer: &mut [u8], _callback: AsyncCallback) -> Option<IoResult> {
         Some(Err(IoError::Unknown))
+    }
+
+    /// Write a UDP datagram. The buffer format is:
+    ///   [dest_ip: 4 bytes] [dest_port: 2 bytes, big-endian] [payload...]
+    /// If the local IP is known, the datagram is sent immediately and the
+    /// callback is completed synchronously. Otherwise, the write is queued
+    /// in PENDING_UDP_WRITES and will be flushed when DHCP completes.
+    pub fn write(&self, buffer: &[u8], local_ip: Option<Ipv4Address>, callback: AsyncCallback) -> Option<IoResult> {
+        if buffer.len() < 6 {
+            return Some(Err(IoError::InvalidArgument));
+        }
+        let dest_ip = Ipv4Address([buffer[0], buffer[1], buffer[2], buffer[3]]);
+        let dest_port = u16::from_be_bytes([buffer[4], buffer[5]]);
+        let payload = &buffer[6..];
+
+        if let Some(src_ip) = local_ip {
+            let datagram = create_datagram(src_ip, *self.port, dest_ip, dest_port, payload);
+            net_respond(dest_ip, datagram);
+            complete_op(callback, Ok(payload.len() as u32));
+            Some(Ok(payload.len() as u32))
+        } else {
+            // Queue for later — DHCP hasn't resolved yet
+            PENDING_UDP_WRITES.lock().push_back(PendingUdpWrite {
+                source_port: self.port,
+                dest_ip,
+                dest_port,
+                payload: Vec::from(payload),
+                callback,
+            });
+            None
+        }
+    }
+}
+
+pub struct PendingUdpWrite {
+    pub source_port: SocketPort,
+    pub dest_ip: Ipv4Address,
+    pub dest_port: u16,
+    pub payload: Vec<u8>,
+    pub callback: AsyncCallback,
+}
+
+// TODO: These are global singletons, which only works with a single network
+// device. When multi-device support is added, the pending queue and resolved IP
+// should be per-device.
+static PENDING_UDP_WRITES: spin::Mutex<VecDeque<PendingUdpWrite>> =
+    spin::Mutex::new(VecDeque::new());
+
+static RESOLVED_LOCAL_IP: spin::RwLock<Option<Ipv4Address>> = spin::RwLock::new(None);
+
+/// Returns the local IP if DHCP has completed.
+pub fn get_resolved_local_ip() -> Option<Ipv4Address> {
+    *RESOLVED_LOCAL_IP.read()
+}
+
+/// Called when DHCP completes and the local IP is known.
+/// Stores the IP for future synchronous access, then flushes all pending UDP writes.
+pub fn flush_pending_udp_writes(local_ip: Ipv4Address) {
+    *RESOLVED_LOCAL_IP.write() = Some(local_ip);
+    let mut pending = PENDING_UDP_WRITES.lock();
+    while let Some(write) = pending.pop_front() {
+        let datagram = create_datagram(
+            local_ip,
+            *write.source_port,
+            write.dest_ip,
+            write.dest_port,
+            &write.payload,
+        );
+        net_respond(write.dest_ip, datagram);
+        complete_op(write.callback, Ok(write.payload.len() as u32));
     }
 }
 

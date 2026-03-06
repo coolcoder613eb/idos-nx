@@ -41,7 +41,7 @@ use alloc::{
     collections::BTreeMap,
     string::{String, ToString},
 };
-use idos_api::io::error::{IoError, IoResult};
+use idos_api::io::error::IoError;
 use spin::RwLock;
 
 use crate::{io::async_io::AsyncOpID, task::id::TaskID};
@@ -136,7 +136,7 @@ pub fn socket_io_bind(
 
             let mut active_connections = ACTIVE_CONNECTIONS.write();
             let port = SocketPort::new(port);
-            if let Some(_) = active_connections.get(&port) {
+            if active_connections.get(&port).is_some() {
                 // Port is already in use
                 return Some(Err(IoError::ResourceInUse));
             }
@@ -157,7 +157,7 @@ pub fn socket_io_bind(
                     // This is a local TCP listener
                     let mut active_connections = ACTIVE_CONNECTIONS.write();
                     let port = SocketPort::new(port);
-                    if let Some(_) = active_connections.get(&port) {
+                    if active_connections.get(&port).is_some() {
                         return Some(Err(IoError::ResourceInUse));
                     }
 
@@ -265,9 +265,9 @@ pub fn socket_io_write(
         None => return Some(Err(IoError::FileHandleInvalid)),
     };
     match socket_type {
-        SocketType::Udp(_listener) => {
-            // TODO: UDP write needs destination address in the buffer
-            Some(Err(IoError::UnsupportedOperation))
+        SocketType::Udp(listener) => {
+            let local_ip = listen::get_resolved_local_ip();
+            listener.write(buffer, local_ip, callback)
         }
         SocketType::TcpListener(_) => Some(Err(IoError::UnsupportedOperation)),
         SocketType::TcpConnection(connection) => connection.write(buffer),

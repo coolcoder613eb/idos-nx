@@ -13,7 +13,7 @@ use idos_api::{
     },
     syscall::{
         io::{append_io_op, block_on_wake_set, create_wake_set},
-        net::create_tcp_handle,
+        net::{create_tcp_handle, create_udp_handle},
     },
 };
 
@@ -33,16 +33,21 @@ pub extern "C" fn main() {
         }
     };
 
-    let socket = create_tcp_handle();
-
-    match config.mode {
-        Mode::Listen => run_listen(stdout, socket, &config),
-        Mode::Connect => run_connect(stdout, socket, &config),
+    if config.udp {
+        let socket = create_udp_handle();
+        run_udp(stdout, socket, &config);
+    } else {
+        let socket = create_tcp_handle();
+        match config.mode {
+            Mode::Listen => run_listen(stdout, socket, &config),
+            Mode::Connect => run_connect(stdout, socket, &config),
+        }
     }
 }
 
 struct Config {
     mode: Mode,
+    udp: bool,
     host: [u8; 64],
     host_len: usize,
     port: u16,
@@ -60,6 +65,7 @@ fn build_config() -> Result<Config, &'static str> {
 
     let mut config = Config {
         mode: Mode::Connect,
+        udp: false,
         host: [0; 64],
         host_len: 0,
         port: 0,
@@ -71,6 +77,9 @@ fn build_config() -> Result<Config, &'static str> {
         match args.next() {
             Some("-l") => {
                 config.mode = Mode::Listen;
+            }
+            Some("-u") => {
+                config.udp = true;
             }
             Some(arg) => {
                 if !got_host {
@@ -164,6 +173,81 @@ fn run_connect(stdout: Handle, socket: Handle, config: &Config) {
     }
 
     relay_bidirectional(stdout, socket);
+}
+
+fn run_udp(stdout: Handle, socket: Handle, config: &Config) {
+    let host = &config.host[..config.host_len];
+    let dest_ip = match parse_ipv4(host) {
+        Some(ip) => ip,
+        None => {
+            let _ = write_sync(stdout, b"UDP requires a numeric IP address\n", 0);
+            return;
+        }
+    };
+
+    // Bind to an ephemeral local port
+    if open_sync(socket, "0.0.0.0", 0).is_err() {
+        let _ = write_sync(stdout, b"Failed to bind UDP socket\n", 0);
+        return;
+    }
+
+    let mut msg_buf = [0u8; 64];
+    let msg_len = fmt_to_buf(&mut msg_buf, format_args!("Sending UDP to {}:{}\n",
+        unsafe { core::str::from_utf8_unchecked(host) }, config.port));
+    let _ = write_sync(stdout, &msg_buf[..msg_len], 0);
+
+    // Read lines from stdin and send as UDP datagrams
+    let mut input_buf = [0u8; 512];
+    loop {
+        let n = match read_sync(STDIN, &mut input_buf, 0) {
+            Ok(n) => n as usize,
+            Err(_) => break,
+        };
+        if n == 0 {
+            break;
+        }
+
+        // Build UDP write buffer: [dest_ip:4][dest_port:2 BE][payload]
+        let mut write_buf = [0u8; 518]; // 6 header + 512 payload
+        write_buf[0..4].copy_from_slice(&dest_ip);
+        write_buf[4..6].copy_from_slice(&config.port.to_be_bytes());
+        write_buf[6..6 + n].copy_from_slice(&input_buf[..n]);
+        let _ = write_sync(socket, &write_buf[..6 + n], 0);
+    }
+}
+
+/// Parse a dotted-decimal IPv4 address (e.g. "10.0.2.2") into 4 bytes.
+fn parse_ipv4(s: &[u8]) -> Option<[u8; 4]> {
+    let mut octets = [0u8; 4];
+    let mut octet_idx = 0;
+    let mut current: u16 = 0;
+    let mut has_digit = false;
+
+    for &b in s {
+        if b == b'.' {
+            if !has_digit || octet_idx >= 3 {
+                return None;
+            }
+            if current > 255 {
+                return None;
+            }
+            octets[octet_idx] = current as u8;
+            octet_idx += 1;
+            current = 0;
+            has_digit = false;
+        } else if b >= b'0' && b <= b'9' {
+            current = current * 10 + (b - b'0') as u16;
+            has_digit = true;
+        } else {
+            return None;
+        }
+    }
+
+    if !has_digit || octet_idx != 3 || current > 255 {
+        return None;
+    }
+    octets[3] = current as u8;
+    Some(octets)
 }
 
 /// Relay data between stdin and the socket, using a wake set to multiplex.

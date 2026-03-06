@@ -3,13 +3,11 @@ use core::sync::atomic::Ordering;
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, VecDeque},
-    string::String,
     vec::Vec,
 };
 use idos_api::io::{AsyncOp, ASYNC_OP_OPEN, ASYNC_OP_READ, ASYNC_OP_WRITE};
 
 use crate::{
-    executor::{Executor, WaitForEvent},
     io::handle::Handle,
     task::actions::{handle::create_file_handle, io::send_io_op},
 };
@@ -307,7 +305,7 @@ impl NetDevice {
                 ip_header.dest,
                 dest_port,
                 ip_header.source,
-                &tcp_header,
+                tcp_header,
                 tcp_payload,
             );
         } else if ip_header.protocol == IpProtocolType::Icmp {

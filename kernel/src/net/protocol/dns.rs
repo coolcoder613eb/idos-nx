@@ -52,17 +52,17 @@ impl DnsHeader {
         crate::random::get_random_bytes(&mut xid_bytes);
         let xid: u16 = u16::from_le_bytes(xid_bytes);
         let header = Self::build_query_header(xid, questions.len() as u16);
-        packet.extend_from_slice(&header.as_u8_buffer());
+        packet.extend_from_slice(header.as_u8_buffer());
 
         for question in questions {
             match question {
                 DnsQuestion::A(name) => {
-                    packet.extend_from_slice(&name);
+                    packet.extend_from_slice(name);
                     packet.extend_from_slice(&[0, 1]); // A record
                     packet.extend_from_slice(&[0, 1]); // Class IN
                 }
                 DnsQuestion::Cname(name) => {
-                    packet.extend_from_slice(&name);
+                    packet.extend_from_slice(name);
                     packet.extend_from_slice(&[0, 5]); // CNAME record
                     packet.extend_from_slice(&[0, 1]);
                 }
@@ -244,7 +244,7 @@ impl<'a> DnsParser<'a> {
                     jumped = true;
                 }
 
-                let pointer = (((label_len & 0x3f) as u16) << 8 | self.read_u8()? as u16)
+                let pointer = ((((label_len & 0x3f) as u16) << 8) | self.read_u8()? as u16)
                     - (DnsHeader::get_size() as u16);
                 self.pos = pointer as usize;
 

@@ -14,7 +14,7 @@ use crate::task::map::get_task;
 use crate::task::paging::get_current_physical_address;
 
 use super::super::super::socket::{port::SocketPort, SocketId};
-use super::super::{ipv4::Ipv4Address, packet::PacketHeader};
+use super::super::ipv4::Ipv4Address;
 use super::header::TcpHeader;
 
 #[derive(Clone, Copy)]
@@ -123,7 +123,7 @@ impl TcpConnection {
                 self.last_sequence_received = u32::from_be(header.sequence_number) + 1;
                 if let Some((callback, should_create_provider)) = self.on_connect.take() {
                     if should_create_provider {
-                        let mut provider = SocketIOProvider::create_tcp();
+                        let provider = SocketIOProvider::create_tcp();
                         provider.bind_to(*self.own_id);
                         let task_lock = match get_task(callback.0) {
                             Some(task) => task,

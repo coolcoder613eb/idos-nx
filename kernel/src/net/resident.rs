@@ -5,7 +5,6 @@ use crate::{
     log::TaggedLogger,
     sync::wake_set::WakeSet,
     task::actions::{
-        handle::open_message_queue,
         io::write_sync,
         sync::{block_on_wake_set, create_wake_set, get_inner_wake_set},
     },
@@ -16,7 +15,7 @@ use super::{
     netdevice::{NetDevice, NetEvent},
     protocol::{
         arp::ArpPacket,
-        dhcp::{DhcpPacket, IpResolution},
+        dhcp::IpResolution,
         dns::{get_dns_port, lookup_dns, DnsHeader, DnsQuestion},
         ethernet::EthernetFrameHeader,
         ipv4::Ipv4Address,
@@ -26,7 +25,7 @@ use super::{
     },
     socket::{create_dns_socket, port::SocketPort},
 };
-use alloc::{boxed::Box, collections::VecDeque, string::String, sync::Arc, vec::Vec};
+use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::str::FromStr;
 
 use spin::{Mutex, RwLock};
@@ -37,7 +36,6 @@ pub enum NetRequest {
     RegisterDevice(String, HardwareAddress),
     GetIp,
     GetMacForIp(Ipv4Address),
-    SendUdp(SocketPort, String, SocketPort, Vec<u8>),
     OpenTcp(SocketPort, String, SocketPort),
     Respond(Ipv4Address, Vec<u8>),
 }
@@ -169,29 +167,6 @@ pub fn net_stack_resident() -> ! {
                             }
                         });
                     }
-                    NetRequest::SendUdp(local_port, dest, remote_port, payload) => {
-                        LOGGER.log(format_args!("SEND PACKET TO {}", dest));
-                        let (executor, active_device) = network_devices.get_mut(0).unwrap();
-                        let device = active_device.clone();
-                        let waker_reg = executor.waker_registry();
-                        executor.spawn(async move {
-                            match send_udp(
-                                local_port,
-                                dest,
-                                remote_port,
-                                payload,
-                                device,
-                                waker_reg,
-                            )
-                            .await
-                            {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    LOGGER.log(format_args!("Failed to send packet"));
-                                }
-                            }
-                        });
-                    }
                     NetRequest::OpenTcp(local_port, dest, remote_port) => {
                         LOGGER.log(format_args!(
                             "OPEN TCP {} -> {}{}",
@@ -275,7 +250,10 @@ async fn get_local_ip(
 
     let final_state = net_dev_lock.read().dhcp_state.local_ip.clone();
     match final_state {
-        IpResolution::Bound(ip, _expiration) => Some(ip),
+        IpResolution::Bound(ip, _expiration) => {
+            super::socket::listen::flush_pending_udp_writes(ip);
+            Some(ip)
+        }
         _ => None,
     }
 }
@@ -327,17 +305,6 @@ async fn get_next_hop(
         let gateway = net_dev_lock.read().dhcp_state.gateway_ip;
         resolve_ip_to_mac(gateway, net_dev_lock, waker_registry).await
     }
-}
-
-async fn send_udp(
-    local_port: SocketPort,
-    destination: String,
-    remote_port: SocketPort,
-    payload: Vec<u8>,
-    net_dev_lock: Arc<RwLock<NetDevice>>,
-    waker_registry: WakerRegistry<NetEvent>,
-) -> Result<(), ()> {
-    unimplemented!();
 }
 
 async fn open_tcp(
