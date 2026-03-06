@@ -78,7 +78,9 @@ impl ConsoleManager {
                         let cid = *console_id;
                         if is_move {
                             // Move: the source task is giving up ownership.
-                            // Reader task list is updated by the caller.
+                            if let Some(console) = self.consoles.get_mut(cid) {
+                                console.remove_reader_task(sender);
+                            }
                         } else {
                             // Duplicate: both tasks will share this instance.
                             *ref_count += 1;

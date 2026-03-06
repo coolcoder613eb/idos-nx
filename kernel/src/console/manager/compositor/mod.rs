@@ -427,6 +427,37 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         }
     }
 
+    /// Remove a window and adjust all index references.
+    /// Returns the console_index that was associated with the removed window.
+    pub fn remove_window(&mut self, idx: usize) -> Option<usize> {
+        if idx >= self.windows.len() {
+            return None;
+        }
+        let console_index = self.windows[idx].console_index;
+        self.windows.remove(idx);
+
+        // Remove from float_order and adjust remaining indices
+        self.float_order.retain(|&i| i != idx);
+        for fi in &mut self.float_order {
+            if *fi > idx {
+                *fi -= 1;
+            }
+        }
+
+        // Adjust focused_window
+        if self.windows.is_empty() {
+            self.focused_window = 0;
+        } else if self.focused_window == idx {
+            // Focus the previous window, or 0 if we removed the first
+            self.focused_window = idx.saturating_sub(1);
+        } else if self.focused_window > idx {
+            self.focused_window -= 1;
+        }
+
+        self.force_redraw = true;
+        Some(console_index)
+    }
+
     pub fn raise_window(&mut self, idx: usize) {
         if self.windows.get(idx).map_or(false, |w| w.mode == WindowMode::Floating) {
             self.float_order.retain(|&i| i != idx);

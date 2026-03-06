@@ -12,7 +12,7 @@ use crate::task::actions::handle::{
     create_file_handle, create_pipe_handles, create_task, open_message_queue, transfer_handle,
 };
 use crate::task::actions::io::{
-    close_sync, driver_io_complete, open_sync, read_sync, send_io_op, write_sync,
+    close_sync, driver_io_complete, open_sync, read_sync, send_io_op, share_sync, write_sync,
 };
 use crate::task::actions::lifecycle::{create_kernel_task, terminate};
 use crate::task::actions::memory::map_memory;
@@ -273,6 +273,16 @@ pub fn manager_task() -> ! {
                     compositor.topbar_state.hover = None;
                     prev_hover = None;
                 }
+                Some(manager::hit::HitTarget::WindowButton(idx, 2)) => {
+                    if let Some(console_id) = compositor.remove_window(idx as usize) {
+                        if let Some(console) = conman.consoles.get_mut(console_id) {
+                            console.terminate_all_tasks();
+                        }
+                        conman.current_console = compositor.focused_console();
+                    }
+                    compositor.topbar_state.hover = None;
+                    prev_hover = None;
+                }
                 Some(manager::hit::HitTarget::WindowTitleBar(idx)) => {
                     if compositor.is_window_floating(idx as usize) {
                         let win_x = compositor.get_window_x(idx as usize);
@@ -373,8 +383,9 @@ fn start_command(console_index: usize) -> Handle {
     let _ = write_sync(stdout, b"Loading COMMAND.ELF from C:\n\n", 0);
 
     let (task_handle, task_id) = create_task();
-    transfer_handle(stdin, task_id);
-    transfer_handle(stdout, task_id);
+
+    let _ = share_sync(stdin, task_id);
+    let _ = share_sync(stdout, task_id);
 
     let _ = crate::exec::exec_program(task_id, "C:\\COMMAND.ELF");
 

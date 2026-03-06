@@ -36,7 +36,9 @@ impl<const COLS: usize, const ROWS: usize> Console<COLS, ROWS> {
     }
 
     pub fn add_reader_task(&mut self, task_id: TaskID) {
-        self.reader_tasks.push(task_id);
+        if !self.reader_tasks.contains(&task_id) {
+            self.reader_tasks.push(task_id);
+        }
     }
 
     pub fn remove_reader_task(&mut self, task_id: TaskID) {
@@ -54,6 +56,14 @@ impl<const COLS: usize, const ROWS: usize> Console<COLS, ROWS> {
             return task;
         }
         None
+    }
+
+    /// Terminate all reader tasks (used when closing a window).
+    /// Drains the stack from top to bottom so children are killed before parents.
+    pub fn terminate_all_tasks(&mut self) {
+        while let Some(id) = self.reader_tasks.pop() {
+            crate::task::actions::lifecycle::terminate_task(id, 130);
+        }
     }
 
     /// Send bytes of input from the keyboard. If input is flushed, all pending
