@@ -23,7 +23,7 @@ use crate::time::system::get_system_ticks;
 use idos_api::ipc::Message;
 
 use self::graphics::framebuffer::Framebuffer;
-use self::input::KeyAction;
+use self::input::{AltAction, KeyAction};
 use self::manager::ConsoleManager;
 use self::manager::topbar::TOP_BAR_HEIGHT;
 
@@ -171,7 +171,38 @@ pub fn manager_task() -> ! {
             } else {
                 match KeyAction::from_raw(last_action_type, next_action) {
                     Some(action) => {
-                        conman.handle_key_action(action);
+                        if let Some(alt) = conman.handle_key_action(action) {
+                            match alt {
+                                AltAction::CloseWindow => {
+                                    let idx = compositor.focused_window;
+                                    if let Some(console_id) = compositor.remove_window(idx) {
+                                        if let Some(console) = conman.consoles.get_mut(console_id) {
+                                            console.terminate_all_tasks();
+                                        }
+                                        conman.current_console = compositor.focused_console();
+                                    }
+                                }
+                                AltAction::NewTerminal => {
+                                    let con = conman.add_console();
+                                    compositor.add_window(con);
+                                    let new_idx = compositor.window_count() - 1;
+                                    compositor.focused_window = new_idx;
+                                    conman.current_console = compositor.focused_console();
+                                    spawn_command_for_console(con);
+                                }
+                                AltAction::CycleFocus => {
+                                    let count = compositor.window_count();
+                                    if count > 0 {
+                                        compositor.focused_window = (compositor.focused_window + 1) % count;
+                                        conman.current_console = compositor.focused_console();
+                                        compositor.force_redraw = true;
+                                    }
+                                }
+                                AltAction::ToggleFloat => {
+                                    compositor.try_toggle_window_mode(compositor.focused_window);
+                                }
+                            }
+                        }
                     }
                     None => (),
                 }
@@ -269,7 +300,7 @@ pub fn manager_task() -> ! {
                     compositor.topbar_state.active_desktop = n;
                 }
                 Some(manager::hit::HitTarget::WindowButton(idx, 0)) => {
-                    compositor.toggle_window_mode(idx as usize);
+                    compositor.try_toggle_window_mode(idx as usize);
                     compositor.topbar_state.hover = None;
                     prev_hover = None;
                 }
@@ -370,6 +401,19 @@ pub fn init_console() {
 pub fn console_ready() {
     let _cmd1 = start_command(0);
     let _cmd2 = start_command(1);
+}
+
+/// Spawn a COMMAND.ELF for a console without doing any sync I/O on
+/// console devices. Instead, passes the device path as an argument so the
+/// program opens it itself. Safe to call from the console manager task.
+fn spawn_command_for_console(console_index: usize) {
+    let dev_path = alloc::format!("DEV:\\CON{}", console_index + 1);
+
+    let (_task_handle, task_id) = create_task();
+
+    crate::task::actions::lifecycle::add_args(task_id, ["C:\\COMMAND.ELF", dev_path.as_str()]);
+
+    let _ = crate::exec::exec_program(task_id, "C:\\COMMAND.ELF");
 }
 
 fn start_command(console_index: usize) -> Handle {

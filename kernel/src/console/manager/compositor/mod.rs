@@ -258,18 +258,30 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
                         let w = screen_width - decor::DECOR_EXTRA_W;
                         let h = cell_h - decor::DECOR_EXTRA_H;
                         (x, y, w, h)
+                    } else if tiled_count == 3 {
+                        // Top window full-width, bottom two side-by-side
+                        let half_h = desk_h / 2;
+                        if tile_pos == 0 {
+                            let x = 0u16;
+                            let y = TOP_BAR_HEIGHT;
+                            let w = screen_width - decor::DECOR_EXTRA_W;
+                            let h = half_h - decor::DECOR_EXTRA_H;
+                            (x, y, w, h)
+                        } else {
+                            let half_w = screen_width / 2;
+                            let col = tile_pos - 1;
+                            let x = col as u16 * half_w;
+                            let y = TOP_BAR_HEIGHT + half_h;
+                            let w = half_w - decor::DECOR_EXTRA_W;
+                            let h = half_h - decor::DECOR_EXTRA_H;
+                            (x, y, w, h)
+                        }
                     } else {
-                        // Grid layout for 3+
-                        let cols = {
-                            let mut c = 1usize;
-                            while c * c < tiled_count { c += 1; }
-                            c
-                        };
-                        let rows_count = (tiled_count + cols - 1) / cols;
-                        let cell_w = screen_width / cols as u16;
-                        let cell_h = desk_h / rows_count as u16;
-                        let row = tile_pos / cols;
-                        let col = tile_pos % cols;
+                        // 2x2 grid for 4 tiled windows
+                        let cell_w = screen_width / 2;
+                        let cell_h = desk_h / 2;
+                        let row = tile_pos / 2;
+                        let col = tile_pos % 2;
                         let x = col as u16 * cell_w;
                         let y = TOP_BAR_HEIGHT + row as u16 * cell_h;
                         let w = cell_w - decor::DECOR_EXTRA_W;
@@ -302,7 +314,7 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
             let focused = win_idx == self.focused_window;
 
             let (new_width, new_height, dirty_region) =
-                conman.draw_window(console, &mut sub_buffer, font, avail_w, avail_h, self.force_redraw, hover_button, focused);
+                conman.draw_window(console, &mut sub_buffer, font, avail_w, avail_h, self.force_redraw, hover_button, focused, bpp);
 
             let window = &mut self.windows[win_idx];
             let screen_dirty = if new_width != window.last_width || new_height != window.last_height
@@ -405,25 +417,35 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         }
     }
 
-    pub fn toggle_window_mode(&mut self, idx: usize) {
-        if let Some(window) = self.windows.get_mut(idx) {
-            match window.mode {
-                WindowMode::Tiled => {
-                    window.mode = WindowMode::Floating;
-                    // Center on desktop
-                    let content_w = 640 + decor::DECOR_EXTRA_W;
-                    let content_h = 400 + decor::DECOR_EXTRA_H;
-                    window.x = (self.fb.width.saturating_sub(content_w)) / 2;
-                    window.y = TOP_BAR_HEIGHT
-                        + (self.fb.height - TOP_BAR_HEIGHT).saturating_sub(content_h) / 2;
-                    self.float_order.push(idx);
-                }
-                WindowMode::Floating => {
-                    window.mode = WindowMode::Tiled;
-                    self.float_order.retain(|&i| i != idx);
-                }
+    /// Toggle a window between tiled and floating. If the window is floating
+    /// and there are already 4 tiled windows, the toggle is refused.
+    pub fn try_toggle_window_mode(&mut self, idx: usize) {
+        let window = match self.windows.get(idx) {
+            Some(w) => w,
+            None => return,
+        };
+        match window.mode {
+            WindowMode::Tiled => {
+                let window = &mut self.windows[idx];
+                window.mode = WindowMode::Floating;
+                let content_w = 640 + decor::DECOR_EXTRA_W;
+                let content_h = 400 + decor::DECOR_EXTRA_H;
+                window.x = (self.fb.width.saturating_sub(content_w)) / 2;
+                window.y = TOP_BAR_HEIGHT
+                    + (self.fb.height - TOP_BAR_HEIGHT).saturating_sub(content_h) / 2;
+                self.float_order.push(idx);
+                self.force_redraw = true;
             }
-            self.force_redraw = true;
+            WindowMode::Floating => {
+                let tiled_count = self.windows.iter().filter(|w| w.mode == WindowMode::Tiled).count();
+                if tiled_count >= 4 {
+                    return; // grid is full
+                }
+                let window = &mut self.windows[idx];
+                window.mode = WindowMode::Tiled;
+                self.float_order.retain(|&i| i != idx);
+                self.force_redraw = true;
+            }
         }
     }
 
@@ -468,6 +490,10 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
 
     pub fn focused_console(&self) -> usize {
         self.windows.get(self.focused_window).map_or(0, |w| w.console_index)
+    }
+
+    pub fn window_count(&self) -> usize {
+        self.windows.len()
     }
 
     pub fn move_window(&mut self, idx: usize, x: u16, y: u16) {
@@ -569,14 +595,42 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
     }
 
     pub fn add_window(&mut self, console_index: usize) {
-        self.windows.push(Window {
+        let tiled_count = self.windows.iter().filter(|w| w.mode == WindowMode::Tiled).count();
+        let mode = if tiled_count >= 4 {
+            WindowMode::Floating
+        } else {
+            WindowMode::Tiled
+        };
+
+        let mut window = Window {
             console_index,
-            mode: WindowMode::Tiled,
+            mode,
             x: 0,
             y: TOP_BAR_HEIGHT,
             last_width: 0,
             last_height: 0,
-        });
+        };
+
+        if mode == WindowMode::Floating {
+            let content_w = 640 + decor::DECOR_EXTRA_W;
+            let content_h = 400 + decor::DECOR_EXTRA_H;
+            // Offset each floating window slightly so they don't stack exactly
+            let float_count = self.float_order.len() as u16;
+            let offset = float_count * 20;
+            window.x = (self.fb.width.saturating_sub(content_w)) / 2 + offset;
+            window.y = TOP_BAR_HEIGHT
+                + (self.fb.height - TOP_BAR_HEIGHT).saturating_sub(content_h) / 2
+                + offset;
+        }
+
+        self.windows.push(window);
+
+        if mode == WindowMode::Floating {
+            let idx = self.windows.len() - 1;
+            self.float_order.push(idx);
+        }
+
+        self.force_redraw = true;
     }
 }
 

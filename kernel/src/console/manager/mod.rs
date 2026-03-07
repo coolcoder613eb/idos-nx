@@ -15,7 +15,7 @@ use super::graphics::framebuffer::Framebuffer;
 use super::graphics::{Point, Region};
 use super::{
     console::Console,
-    input::{KeyAction, KeyState},
+    input::{AltAction, KeyAction, KeyState},
 };
 use alloc::{collections::VecDeque, vec::Vec};
 
@@ -73,7 +73,16 @@ impl ConsoleManager {
     /// current console for processing. Depending on the key pressed and the
     /// mode of the console, it may trigger a flush. If any content is flushed,
     /// it will also check for pending reads and copy bytes to them.
-    pub fn handle_key_action(&mut self, action: KeyAction) {
+    ///
+    /// Returns `Some(AltAction)` if a window-manager shortcut was detected.
+    pub fn handle_key_action(&mut self, action: KeyAction) -> Option<AltAction> {
+        // Check for alt-key combos before processing normal input
+        if let KeyAction::Press(code) = &action {
+            if let Some(alt) = self.key_state.check_alt_action(*code) {
+                return Some(alt);
+            }
+        }
+
         let mut input_bytes: [u8; 4] = [0; 4];
         let result = self.key_state.process_key_action(action, &mut input_bytes);
         if let Some(len) = result {
@@ -93,6 +102,7 @@ impl ConsoleManager {
                 }
             }
         }
+        None
     }
 
     // Move these to another location:
@@ -107,10 +117,9 @@ impl ConsoleManager {
         force: bool,
         hover_button: Option<u8>,
         focused: bool,
+        bpp: usize,
     ) -> (u16, u16, Option<Region>) {
         let window_pos = Point { x: 0, y: 0 };
-        let bpp = (fb.stride / fb.width) as usize;
-        let bpp = if bpp == 0 { 1 } else { bpp };
 
         // In text mode, skip rendering if nothing changed
         if !force && console.terminal.graphics_buffer.is_none() && !console.dirty {
@@ -169,16 +178,22 @@ impl ConsoleManager {
             }
         } else {
             let font_row_height = font.get_height() as usize;
+            let char_width = font.get_glyph(b'A').map_or(8, |g| g.width as usize);
             let visible_rows = if font_row_height > 0 {
                 ROWS.min(outer_h / font_row_height)
             } else {
                 ROWS
             };
+            let visible_cols = if char_width > 0 {
+                COLS.min(outer_w / char_width)
+            } else {
+                COLS
+            };
             let start_row = ROWS - visible_rows;
 
             let palette = console.terminal.get_palette();
             for r in start_row..ROWS {
-                let colored_chars = console.row_cells_iter(r).map(|cell| {
+                let colored_chars = console.row_cells_iter(r).take(visible_cols).map(|cell| {
                     let fg_index = (cell.color.0 & 0x0F) as usize;
                     let bg_index = ((cell.color.0 >> 4) & 0x0F) as usize;
                     (cell.glyph, palette[fg_index], palette[bg_index])

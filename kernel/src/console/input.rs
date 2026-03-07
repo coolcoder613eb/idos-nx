@@ -15,9 +15,22 @@ impl KeyAction {
     }
 }
 
+/// Alt-key combinations that the console manager intercepts.
+pub enum AltAction {
+    /// Alt+q: close the focused window
+    CloseWindow,
+    /// Alt+Return: open a new terminal window
+    NewTerminal,
+    /// Alt+Tab: rotate focus to the next window
+    CycleFocus,
+    /// Alt+Space: toggle focused window between tiled and floating
+    ToggleFloat,
+}
+
 pub struct KeyState {
     pub ctrl: bool,
     pub shift: bool,
+    pub alt: bool,
 }
 
 impl KeyState {
@@ -25,6 +38,7 @@ impl KeyState {
         Self {
             ctrl: false,
             shift: false,
+            alt: false,
         }
     }
 
@@ -36,6 +50,9 @@ impl KeyState {
                     None
                 } else if code == KeyCode::Control as u8 {
                     self.ctrl = true;
+                    None
+                } else if code == KeyCode::Alt as u8 {
+                    self.alt = true;
                     None
                 } else {
                     let len = self.key_code_to_ascii(code, buffer);
@@ -51,9 +68,30 @@ impl KeyState {
                     self.shift = false;
                 } else if code == KeyCode::Control as u8 {
                     self.ctrl = false;
+                } else if code == KeyCode::Alt as u8 {
+                    self.alt = false;
                 }
                 None
             }
+        }
+    }
+
+    /// Check if a key press is an alt-key combination.
+    /// Returns Some(AltAction) if the alt key is held and the key matches.
+    pub fn check_alt_action(&self, code: u8) -> Option<AltAction> {
+        if !self.alt {
+            return None;
+        }
+        if code == KeyCode::Q as u8 {
+            Some(AltAction::CloseWindow)
+        } else if code == KeyCode::Enter as u8 {
+            Some(AltAction::NewTerminal)
+        } else if code == KeyCode::Tab as u8 {
+            Some(AltAction::CycleFocus)
+        } else if code == KeyCode::Space as u8 {
+            Some(AltAction::ToggleFloat)
+        } else {
+            None
         }
     }
 
