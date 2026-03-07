@@ -899,7 +899,9 @@ fn try_external(env: &mut Environment, name: &String, args: &Vec<String>) -> boo
         let path = env.full_file_path(name);
         if ends_with_ignore_case(path.as_bytes(), b".BAT") {
             if file_exists(&path) {
+                set_console_title(env, path.as_bytes());
                 crate::batch::exec_batch(env, path.as_str(), args);
+                set_console_title(env, b"C:\\COMMAND.ELF");
                 return true;
             }
         } else {
@@ -921,7 +923,9 @@ fn try_external(env: &mut Environment, name: &String, args: &Vec<String>) -> boo
     bat_name.push_str(".BAT");
     let bat_path = env.full_file_path(&bat_name);
     if file_exists(&bat_path) {
+        set_console_title(env, bat_path.as_bytes());
         crate::batch::exec_batch(env, bat_path.as_str(), args);
+        set_console_title(env, b"C:\\COMMAND.ELF");
         return true;
     }
 
@@ -958,6 +962,12 @@ fn file_exists(path: &str) -> bool {
         }
         Err(_) => false,
     }
+}
+
+fn set_console_title(env: &Environment, title: &[u8]) {
+    use idos_api::io::sync::ioctl_sync;
+    use idos_api::io::termios::TSETTITLE;
+    let _ = ioctl_sync(env.stdout, TSETTITLE, title.as_ptr() as u32, title.len() as u32);
 }
 
 fn try_exec(env: &Environment, exec_path: &str, args: &Vec<String>) -> bool {
@@ -1011,6 +1021,8 @@ fn try_exec(env: &Environment, exec_path: &str, args: &Vec<String>) -> bool {
         return false;
     }
 
+    set_console_title(env, exec_path.as_bytes());
     let _ = read_sync(child_handle, &mut [0u8], 0);
+    set_console_title(env, b"C:\\COMMAND.ELF");
     true
 }

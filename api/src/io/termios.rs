@@ -23,6 +23,8 @@ pub const TSETTEXT: u32 = 0x6002;
 pub const TGETPAL: u32 = 0x6003;
 /// Set the current 256-color palette (expects 768 bytes of packed R,G,B)
 pub const TSETPAL: u32 = 0x6004;
+/// Set the console window title (expects a byte string, max 40 bytes)
+pub const TSETTITLE: u32 = 0x6005;
 
 pub const PALETTE_ENTRIES: usize = 256;
 pub const PALETTE_SIZE: usize = PALETTE_ENTRIES * 3;

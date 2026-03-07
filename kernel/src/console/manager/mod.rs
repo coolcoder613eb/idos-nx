@@ -130,7 +130,7 @@ impl ConsoleManager {
         let content_x = decor::CONTENT_X as usize;
 
         let inner_width = avail_w;
-        self::decor::draw_window_bar(fb, window_pos, inner_width, font, "C:\\COMMAND.ELF", focused, bpp, hover_button);
+        self::decor::draw_window_bar(fb, window_pos, inner_width, font, &console.title, focused, bpp, hover_button);
 
         // The outer area is always avail_w × avail_h (border + black fill).
         // The terminal content is drawn at its natural size within that.

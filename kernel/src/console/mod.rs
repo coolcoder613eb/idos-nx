@@ -140,8 +140,8 @@ pub fn manager_task() -> ! {
     compositor.add_window(con1);
     compositor.add_window(con2);
 
-    // Set initial window name
-    compositor.topbar_state.set_window_name(b"C:\\COMMAND.ELF");
+    // Set initial window name from the first console's title
+    compositor.topbar_state.set_window_name(conman.consoles[0].title.as_bytes());
 
     // Initialize clock
     {
@@ -277,6 +277,9 @@ pub fn manager_task() -> ! {
                 compositor.move_window(ds.window_index as usize, new_x, new_y);
             }
         } else {
+            if drag_state.is_some() {
+                compositor.end_drag();
+            }
             drag_state = None;
         }
 
@@ -323,6 +326,7 @@ pub fn manager_task() -> ! {
                             offset_x: mouse_x as i16 - win_x as i16,
                             offset_y: mouse_y as i16 - win_y as i16,
                         });
+                        compositor.begin_drag(idx as usize, &conman, &console_font);
                     }
                 }
                 _ => {}
@@ -356,24 +360,39 @@ pub fn manager_task() -> ! {
 
         // Check if any console is in graphics mode
         let any_graphics = conman.consoles.iter().any(|c| c.terminal.graphics_buffer.is_some());
-        // Check if anything needs redrawing: dirty text consoles, graphics
-        // dirty rects signaled by apps, or mouse movement.
-        let mouse_moved = mouse_x != prev_mouse_x || mouse_y != prev_mouse_y;
-        let any_gfx_dirty = conman.consoles.iter().any(|c| {
-            c.terminal.graphics_buffer.as_ref()
-                .map_or(false, |gb| gb.read_dirty_rect().is_some())
-        });
-        let any_dirty = mouse_moved || any_gfx_dirty || compositor.force_redraw || conman.consoles.iter().any(|c| c.dirty);
 
-        if any_dirty {
-            compositor.render(mouse_x as u16, mouse_y as u16, &conman, &console_font);
+        // Update topbar with the focused console's title
+        if let Some(console) = conman.consoles.get(conman.current_console) {
+            compositor.topbar_state.set_window_name(console.title.as_bytes());
+        }
 
-            // Clear dirty flags after rendering
-            for console in conman.consoles.iter_mut() {
-                console.dirty = false;
+        if compositor.is_dragging() {
+            // Fast drag path: just composite cached window over cached background
+            let mouse_moved = mouse_x != prev_mouse_x || mouse_y != prev_mouse_y;
+            if mouse_moved {
+                compositor.render_drag(mouse_x as u16, mouse_y as u16);
+                prev_mouse_x = mouse_x;
+                prev_mouse_y = mouse_y;
             }
-            prev_mouse_x = mouse_x;
-            prev_mouse_y = mouse_y;
+        } else {
+            // Normal render path
+            let mouse_moved = mouse_x != prev_mouse_x || mouse_y != prev_mouse_y;
+            let any_gfx_dirty = conman.consoles.iter().any(|c| {
+                c.terminal.graphics_buffer.as_ref()
+                    .map_or(false, |gb| gb.read_dirty_rect().is_some())
+            });
+            let any_dirty = mouse_moved || any_gfx_dirty || compositor.force_redraw || conman.consoles.iter().any(|c| c.dirty);
+
+            if any_dirty {
+                compositor.render(mouse_x as u16, mouse_y as u16, &conman, &console_font);
+
+                // Clear dirty flags after rendering
+                for console in conman.consoles.iter_mut() {
+                    console.dirty = false;
+                }
+                prev_mouse_x = mouse_x;
+                prev_mouse_y = mouse_y;
+            }
         }
 
         // In graphics mode, poll at ~60fps so we notice dirty rects promptly.

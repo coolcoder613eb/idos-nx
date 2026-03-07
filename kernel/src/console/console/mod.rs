@@ -4,7 +4,7 @@ pub mod textmode;
 use crate::task::id::TaskID;
 
 use self::term::Terminal;
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use idos_api::io::termios;
 
 pub struct Console<const COLS: usize, const ROWS: usize> {
@@ -17,6 +17,9 @@ pub struct Console<const COLS: usize, const ROWS: usize> {
     pub flushed_input: VecDeque<u8>,
 
     reader_tasks: Vec<TaskID>,
+
+    /// The display title for this console's window decoration bar.
+    pub title: String,
 
     /// Set when display content has changed and needs re-rendering.
     /// Cleared by the compositor after drawing.
@@ -31,6 +34,7 @@ impl<const COLS: usize, const ROWS: usize> Console<COLS, ROWS> {
             pending_input: Vec::new(),
             flushed_input: VecDeque::new(),
             reader_tasks: Vec::new(),
+            title: String::from("C:\\COMMAND.ELF"),
             dirty: true,
         }
     }

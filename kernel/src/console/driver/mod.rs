@@ -261,6 +261,17 @@ impl ConsoleManager {
                 console.terminal.set_palette_rgb(buf);
                 Ok(1)
             }
+            termios::TSETTITLE => {
+                let len = arg_len.min(40);
+                let buf = unsafe { core::slice::from_raw_parts(arg_ptr, len) };
+                console.title.clear();
+                for &b in buf {
+                    if b == 0 { break; }
+                    console.title.push(b as char);
+                }
+                console.dirty = true;
+                Ok(1)
+            }
             _ => Err(IoError::UnsupportedOperation),
         }
     }

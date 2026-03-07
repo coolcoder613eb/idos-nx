@@ -49,6 +49,22 @@ struct Window {
     last_height: u16,
 }
 
+/// State for fast window dragging. While active, we skip full re-renders
+/// and instead composite a cached window snapshot over a cached background.
+struct DragRender {
+    /// Window index being dragged
+    window_idx: usize,
+    /// Snapshot of the dragged window's pixels (row-major, no stride padding)
+    window_snapshot: VirtualAddress,
+    window_snapshot_size: usize,
+    /// Total pixel dimensions of the snapshot (including decorations)
+    snap_w: u16,
+    snap_h: u16,
+    /// Previous position of the dragged window (for erasing)
+    prev_x: u16,
+    prev_y: u16,
+}
+
 pub struct Compositor<const COLOR_DEPTH: ColorDepth> {
     /// Framebuffer representing the graphics memory to draw to
     fb: Framebuffer,
@@ -71,6 +87,9 @@ pub struct Compositor<const COLOR_DEPTH: ColorDepth> {
     pub focused_window: usize,
     /// Z-order for floating windows (indices into `windows`, bottom to top)
     float_order: Vec<usize>,
+
+    /// Active drag-rendering state (None when not dragging)
+    drag_render: Option<DragRender>,
 
     pub hit_map: HitMap,
     pub topbar_state: TopBarState,
@@ -106,6 +125,8 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
             windows: Vec::new(),
             focused_window: 0,
             float_order: Vec::new(),
+
+            drag_render: None,
 
             hit_map: HitMap::new(),
             topbar_state: TopBarState::new(),
@@ -215,7 +236,15 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         self.dirty_regions.push(region);
     }
 
+    fn draw_windows_except<F: Font>(&mut self, conman: &ConsoleManager, font: &F, skip: usize) {
+        self.draw_windows_inner(conman, font, Some(skip));
+    }
+
     pub fn draw_windows<F: Font>(&mut self, conman: &ConsoleManager, font: &F) {
+        self.draw_windows_inner(conman, font, None);
+    }
+
+    fn draw_windows_inner<F: Font>(&mut self, conman: &ConsoleManager, font: &F, skip_idx: Option<usize>) {
         let screen_width = self.fb.width;
         let screen_height = self.fb.height;
         let stride = self.fb.stride;
@@ -239,6 +268,9 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         }
 
         for &win_idx in &draw_order {
+            if skip_idx == Some(win_idx) {
+                continue;
+            }
             let window = &self.windows[win_idx];
 
             // Compute per-window position and available content area
@@ -504,7 +536,9 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
             let max_y = self.fb.height.saturating_sub(total_h);
             window.x = x.min(max_x);
             window.y = y.clamp(TOP_BAR_HEIGHT, max_y);
-            self.force_redraw = true;
+            if self.drag_render.is_none() {
+                self.force_redraw = true;
+            }
         }
     }
 
@@ -518,6 +552,188 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
 
     pub fn is_window_floating(&self, idx: usize) -> bool {
         self.windows.get(idx).map_or(false, |w| w.mode == WindowMode::Floating)
+    }
+
+    /// Begin fast drag rendering. Renders the scene without the dragged
+    /// window into the scratch buffer, then snapshots the window's pixels
+    /// into a temporary buffer.
+    pub fn begin_drag<F: Font>(&mut self, idx: usize, conman: &ConsoleManager, font: &F) {
+        if idx >= self.windows.len() {
+            return;
+        }
+        let window = &self.windows[idx];
+        let snap_w = window.last_width + decor::DECOR_EXTRA_W;
+        let snap_h = window.last_height + decor::DECOR_EXTRA_H;
+        let bpp = COLOR_DEPTH.to_usize();
+        let snap_row_bytes = snap_w as usize * bpp;
+        let snap_total = snap_row_bytes * snap_h as usize;
+        let snap_pages = (snap_total + 0xfff) / 0x1000;
+        let snap_alloc = snap_pages * 0x1000;
+
+        let snap_vaddr = match crate::task::actions::memory::map_memory(
+            None,
+            snap_alloc as u32,
+            crate::task::memory::MemoryBacking::FreeMemory,
+        ) {
+            Ok(addr) => addr,
+            Err(_) => return,
+        };
+
+        let win_x = window.x;
+        let win_y = window.y;
+
+        // 1. Render the full scene (with the window) into the scratch buffer
+        self.force_redraw = true;
+        self.draw_windows(conman, font);
+
+        // 2. Copy the window's region from scratch into the snapshot buffer
+        let scratch = self.get_scratch_buffer();
+        let snap_buf = unsafe {
+            core::slice::from_raw_parts_mut(snap_vaddr.as_ptr_mut::<u8>(), snap_alloc)
+        };
+        let stride = self.fb.stride as usize;
+        for row in 0..snap_h as usize {
+            let src_y = win_y as usize + row;
+            if src_y >= self.fb.height as usize {
+                break;
+            }
+            let src_offset = src_y * stride + win_x as usize * bpp;
+            let dst_offset = row * snap_row_bytes;
+            snap_buf[dst_offset..dst_offset + snap_row_bytes]
+                .copy_from_slice(&scratch[src_offset..src_offset + snap_row_bytes]);
+        }
+
+        // 3. Re-render the scene WITHOUT the dragged window into scratch
+        //    (this becomes the background for fast compositing)
+        let full = Region {
+            x: 0, y: 0,
+            width: self.fb.width,
+            height: self.fb.height,
+        };
+        self.draw_bg(full);
+        // Redraw the top bar
+        {
+            let screen_width = self.fb.width;
+            let stride = self.fb.stride as usize;
+            let scratch_ptr = unsafe {
+                core::slice::from_raw_parts_mut(
+                    self.scratch_buffer_vaddr.as_ptr_mut::<u8>(),
+                    self.scratch_buffer_size,
+                )
+            };
+            let mut surface = UiSurface::new(
+                scratch_ptr,
+                self.scratch_buffer_vaddr,
+                stride,
+                screen_width,
+                TOP_BAR_HEIGHT,
+                bpp,
+                &mut self.dirty_regions,
+            );
+            self.topbar_state.needs_full_draw = true;
+            topbar::draw(
+                &mut surface,
+                &mut self.hit_map,
+                &mut self.topbar_state,
+                font,
+                screen_width,
+            );
+        }
+        // Draw all windows EXCEPT the dragged one
+        self.draw_windows_except(conman, font, idx);
+
+        self.drag_render = Some(DragRender {
+            window_idx: idx,
+            window_snapshot: snap_vaddr,
+            window_snapshot_size: snap_alloc,
+            snap_w,
+            snap_h,
+            prev_x: win_x,
+            prev_y: win_y,
+        });
+    }
+
+    /// Render a drag frame: blit the background for the old and new window
+    /// positions, then composite the window snapshot at its current position.
+    pub fn render_drag(&mut self, mouse_x: u16, mouse_y: u16) {
+        let dr = match self.drag_render.as_mut() {
+            Some(dr) => dr,
+            None => return,
+        };
+
+        let bpp = COLOR_DEPTH.to_usize();
+        let stride = self.fb.stride as usize;
+        let screen_w = self.fb.width;
+        let screen_h = self.fb.height;
+
+        let window = &self.windows[dr.window_idx];
+        let new_x = window.x;
+        let new_y = window.y;
+        let snap_w = dr.snap_w;
+        let snap_h = dr.snap_h;
+        let snap_row_bytes = snap_w as usize * bpp;
+
+        let fb_raw = self.fb.get_buffer_mut();
+        let scratch_raw = unsafe {
+            core::slice::from_raw_parts(
+                self.scratch_buffer_vaddr.as_ptr_mut::<u8>() as *const u8,
+                self.scratch_buffer_size,
+            )
+        };
+
+        // Restore background at the OLD position
+        let old_x = dr.prev_x;
+        let old_y = dr.prev_y;
+        for row in 0..snap_h as usize {
+            let sy = old_y as usize + row;
+            if sy >= screen_h as usize {
+                break;
+            }
+            let offset = sy * stride + old_x as usize * bpp;
+            let copy_w = (snap_w as usize).min(screen_w as usize - old_x as usize) * bpp;
+            fb_raw[offset..offset + copy_w]
+                .copy_from_slice(&scratch_raw[offset..offset + copy_w]);
+        }
+
+        // Blit window snapshot at the NEW position
+        let snap_buf = unsafe {
+            core::slice::from_raw_parts(
+                dr.window_snapshot.as_ptr_mut::<u8>() as *const u8,
+                dr.window_snapshot_size,
+            )
+        };
+        for row in 0..snap_h as usize {
+            let dy = new_y as usize + row;
+            if dy >= screen_h as usize {
+                break;
+            }
+            let dst_offset = dy * stride + new_x as usize * bpp;
+            let src_offset = row * snap_row_bytes;
+            let copy_w = (snap_w as usize).min(screen_w as usize - new_x as usize) * bpp;
+            let copy_w = copy_w.min(snap_row_bytes);
+            fb_raw[dst_offset..dst_offset + copy_w]
+                .copy_from_slice(&snap_buf[src_offset..src_offset + copy_w]);
+        }
+
+        // Draw cursor on top
+        dr.prev_x = new_x;
+        dr.prev_y = new_y;
+        self.redraw_cursor(mouse_x, mouse_y);
+    }
+
+    /// End fast drag rendering and free the snapshot buffer.
+    pub fn end_drag(&mut self) {
+        if let Some(dr) = self.drag_render.take() {
+            let _ = crate::task::actions::memory::unmap_memory(
+                dr.window_snapshot,
+                dr.window_snapshot_size as u32,
+            );
+            self.force_redraw = true;
+        }
+    }
+
+    pub fn is_dragging(&self) -> bool {
+        self.drag_render.is_some()
     }
 
     pub fn blit_scratch_to_fb(&mut self) {
