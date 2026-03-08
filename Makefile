@@ -14,11 +14,18 @@ fatdrv := build/fatdrv.bin
 gfx := target/i386-idos/release/gfx
 e1000 := target/i386-idos/release/e1000
 floppy := target/i386-idos/release/floppy
+sb16 := target/i386-idos/release/sb16
 netcat := target/i386-idos/release/netcat
 gopher := target/i386-idos/release/gopher
+tonegen := target/i386-idos/release/tonegen
 
 kernel_build_flags := --release -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target i386-kernel.json
 
+qemu_flags := -m 64M -drive format=raw,file=$(diskimage) -serial stdio \
+	-fda $(userdata) -device floppy,unit=1,drive= \
+	-device isa-debug-exit,iobase=0xf4,iosize=4 \
+	-audiodev sdl,id=snd0 -device sb16,audiodev=snd0,irq=5 \
+	-display sdl
 
 .PHONY: all clean run runlogs libc
 
@@ -28,12 +35,12 @@ clean:
 	@rm -r build
 
 run: bootdisk
-	@SDL_VIDEO_DRIVER=x11 qemu-system-i386 -m 64M -drive format=raw,file=$(diskimage) -serial stdio -fda $(userdata) -device floppy,unit=1,drive= -device isa-debug-exit,iobase=0xf4,iosize=4 -display sdl; \
+	@SDL_VIDEO_DRIVER=x11 qemu-system-i386 $(qemu_flags); \
 	EXIT_CODE=$$?; \
 	exit $$(($$EXIT_CODE >> 1))
 
 runlogs: bootdisk logview
-	@SDL_VIDEO_DRIVER=x11 qemu-system-i386 -m 64M -drive format=raw,file=$(diskimage) -serial stdio -fda $(userdata) -device floppy,unit=1,drive= -device isa-debug-exit,iobase=0xf4,iosize=4 -display sdl 2>&1 | target/release/logview; \
+	@SDL_VIDEO_DRIVER=x11 qemu-system-i386 $(qemu_flags) 2>&1 | target/release/logview; \
 	EXIT_CODE=$$?; \
 	exit $$(($$EXIT_CODE >> 1))
 
@@ -50,7 +57,7 @@ $(userdata): $(colordemo)
 	@mcopy -D o -i $(userdata) userdata/static/*.* ::
 	@mcopy -D o -i $(userdata) $(colordemo) ::COLORS.ELF
 
-bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000) $(floppy) $(netcat) $(gopher) $(diskimage) $(userdata) $(bootsector) $(bootbin) $(kernel)
+bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000) $(floppy) $(sb16) $(netcat) $(gopher) $(tonegen) $(diskimage) $(userdata) $(bootsector) $(bootbin) $(kernel)
 	@dd if=$(bootsector) of=$(diskimage) bs=450 count=1 seek=62 skip=62 iflag=skip_bytes oflag=seek_bytes conv=notrunc
 	@mcopy -D o -i $(diskimage) $(bootbin) ::BOOT.BIN
 	@mcopy -D o -i $(diskimage) $(kernel) ::KERNEL.BIN
@@ -62,8 +69,10 @@ bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000)
 	@mcopy -D o -i $(diskimage) $(gfx) ::GFX.ELF
 	@mcopy -D o -i $(diskimage) $(e1000) ::E1000.ELF
 	@mcopy -D o -i $(diskimage) $(floppy) ::FLOPPY.ELF
+	@mcopy -D o -i $(diskimage) $(sb16) ::SB16.ELF
 	@mcopy -D o -i $(diskimage) $(netcat) ::NETCAT.ELF
 	@mcopy -D o -i $(diskimage) $(gopher) ::GOPHER.ELF
+	@mcopy -D o -i $(diskimage) $(tonegen) ::TONEGEN.ELF
 	@mcopy -D o -i $(diskimage) resources/ter-i14n.psf ::TERM14.PSF
 	@mcopy -D o -i $(diskimage) resources/DRIVERS.CFG ::DRIVERS.CFG
 
@@ -132,6 +141,14 @@ $(e1000):
 
 $(floppy):
 	@cd components/drivers/floppy && \
+	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+
+$(sb16):
+	@cd components/drivers/sb16 && \
+	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+
+$(tonegen):
+	@cd components/programs/tonegen && \
 	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
 
 $(netcat):

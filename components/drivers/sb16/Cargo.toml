@@ -1,0 +1,8 @@
+[package]
+name = "sb16"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+idos_api = { workspace = true }
+idos_sdk = { workspace = true }
