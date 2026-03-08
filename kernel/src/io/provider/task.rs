@@ -86,4 +86,8 @@ impl IOProvider for TaskIOProvider {
         }
         None
     }
+
+    fn close(&self, _provider_index: u32, _id: AsyncOpID, _op: UnmappedAsyncOp) -> Option<IoResult> {
+        Some(Ok(0))
+    }
 }

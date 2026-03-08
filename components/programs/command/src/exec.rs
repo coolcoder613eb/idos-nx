@@ -1023,6 +1023,7 @@ fn try_exec(env: &Environment, exec_path: &str, args: &Vec<String>) -> bool {
 
     set_console_title(env, exec_path.as_bytes());
     let _ = read_sync(child_handle, &mut [0u8], 0);
+    let _ = close_sync(child_handle);
     set_console_title(env, b"C:\\COMMAND.ELF");
     true
 }
