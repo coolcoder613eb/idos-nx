@@ -49,16 +49,11 @@ fn try_mount_userspace(drive_letter: &str, dev_name: &str) -> bool {
 }
 
 pub fn mount_fat_fs_single(drive_letter: &str, dev_name: &str) {
-    LOGGER.log(format_args!("Mounting {}:\\ on DEV:\\{}", drive_letter, dev_name));
+    LOGGER.log(format_args!(
+        "Mounting {}:\\ on DEV:\\{}",
+        drive_letter, dev_name
+    ));
     if !try_mount_userspace(drive_letter, dev_name) {
         LOGGER.log(format_args!("Userspace driver unavailable"));
-    }
-}
-
-pub fn mount_fat_fs() {
-    let pairs = [("A", "FD1"), ("C", "ATA1")];
-
-    for pair in pairs.iter() {
-        mount_fat_fs_single(pair.0, pair.1);
     }
 }

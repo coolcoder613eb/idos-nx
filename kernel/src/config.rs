@@ -9,8 +9,10 @@ const LOGGER: TaggedLogger = TaggedLogger::new("CONFIG", 33);
 
 #[derive(Debug)]
 pub enum Directive {
-    /// Launch a built-in kernel driver by name (ps2, ata, floppy, ethernet)
+    /// Launch a built-in kernel driver by name (ps2, ata, ethernet)
     Driver(String),
+    /// Launch a userspace ISA driver ELF: path and IRQ number
+    Isa { path: String, irq: u8 },
     /// Find PCI device by vendor:device, launch userspace ELF, optionally enable bus mastering
     Pci {
         vendor_id: u16,
@@ -93,6 +95,24 @@ fn parse_config(text: &str) -> Vec<Directive> {
                     continue;
                 }
                 directives.push(Directive::Driver(String::from(parts[1])));
+            }
+            "isa" => {
+                if parts.len() < 3 {
+                    LOGGER.log(format_args!("Config: 'isa' missing args: {}", line));
+                    continue;
+                }
+                let path = parts[1];
+                let irq = match u8::from_str_radix(parts[2], 10) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        LOGGER.log(format_args!("Config: invalid IRQ '{}': {}", parts[2], line));
+                        continue;
+                    }
+                };
+                directives.push(Directive::Isa {
+                    path: String::from(path),
+                    irq,
+                });
             }
             "pci" => {
                 if parts.len() < 3 {

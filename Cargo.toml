@@ -6,6 +6,7 @@ members = [
   "bootloader/mbr",
   "components/drivers/e1000",
   "components/drivers/fatdriver",
+  "components/drivers/floppy",
   "components/programs/colordemo",
   "components/programs/command",
   "components/programs/diskchk",

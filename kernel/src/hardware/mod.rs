@@ -2,7 +2,6 @@ pub mod ata;
 pub mod com;
 pub mod cpu;
 pub mod dma;
-pub mod floppy;
 pub mod lapic;
 pub mod pci;
 pub mod pic;

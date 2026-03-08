@@ -1,5 +1,5 @@
 pub const SECTORS_PER_TRACK: usize = 18;
-pub const SECTOR_SIZE: usize = 512; 
+pub const SECTOR_SIZE: usize = 512;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChsGeometry {

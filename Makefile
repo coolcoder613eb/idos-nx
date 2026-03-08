@@ -13,6 +13,7 @@ fatdrv_elf := target/i386-idos/release/fatdriver
 fatdrv := build/fatdrv.bin
 gfx := target/i386-idos/release/gfx
 e1000 := target/i386-idos/release/e1000
+floppy := target/i386-idos/release/floppy
 netcat := target/i386-idos/release/netcat
 gopher := target/i386-idos/release/gopher
 
@@ -49,7 +50,7 @@ $(userdata): $(colordemo)
 	@mcopy -D o -i $(userdata) userdata/static/*.* ::
 	@mcopy -D o -i $(userdata) $(colordemo) ::COLORS.ELF
 
-bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000) $(netcat) $(gopher) $(diskimage) $(userdata) $(bootsector) $(bootbin) $(kernel)
+bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000) $(floppy) $(netcat) $(gopher) $(diskimage) $(userdata) $(bootsector) $(bootbin) $(kernel)
 	@dd if=$(bootsector) of=$(diskimage) bs=450 count=1 seek=62 skip=62 iflag=skip_bytes oflag=seek_bytes conv=notrunc
 	@mcopy -D o -i $(diskimage) $(bootbin) ::BOOT.BIN
 	@mcopy -D o -i $(diskimage) $(kernel) ::KERNEL.BIN
@@ -60,6 +61,7 @@ bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000)
 	@mcopy -D o -i $(diskimage) $(diskchk) ::DISKCHK.ELF
 	@mcopy -D o -i $(diskimage) $(gfx) ::GFX.ELF
 	@mcopy -D o -i $(diskimage) $(e1000) ::E1000.ELF
+	@mcopy -D o -i $(diskimage) $(floppy) ::FLOPPY.ELF
 	@mcopy -D o -i $(diskimage) $(netcat) ::NETCAT.ELF
 	@mcopy -D o -i $(diskimage) $(gopher) ::GOPHER.ELF
 	@mcopy -D o -i $(diskimage) resources/ter-i14n.psf ::TERM14.PSF
@@ -126,6 +128,10 @@ $(gfx):
 
 $(e1000):
 	@cd components/drivers/e1000 && \
+	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+
+$(floppy):
+	@cd components/drivers/floppy && \
 	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
 
 $(netcat):

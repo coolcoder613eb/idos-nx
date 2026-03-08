@@ -108,11 +108,9 @@ fn init_system() -> ! {
 
     if directives.is_empty() {
         logger.log("Warning: no directives found in DRIVERS.CFG, using defaults\n");
-        // Fallback: run the old hardcoded sequence for everything after C:\ mount
-        hardware::floppy::install();
+        // Fallback: no directives found, skip optional drivers
         //hardware::ethernet::dev::install_driver();
         //net::start_net_stack();
-        io::filesystem::fatfs::mount_fat_fs_single("A", "FD1");
         graphics::register_graphics_driver("C:\\GFX.ELF");
         console::init_console();
     } else {
@@ -148,8 +146,7 @@ fn execute_directive(logger: &mut log::BufferedLogger, directive: &config::Direc
                     logger.log("Driver ata already installed (bootstrap)\n");
                 }
                 "floppy" => {
-                    logger.log("Installing Floppy Drivers...\n");
-                    hardware::floppy::install();
+                    logger.log("Warning: floppy is now a userspace driver, use 'isa' directive\n");
                 }
                 _ => {
                     logger.log("Unknown driver: ");
@@ -157,6 +154,29 @@ fn execute_directive(logger: &mut log::BufferedLogger, directive: &config::Direc
                     logger.log("\n");
                 }
             }
+        }
+        Directive::Isa { path, irq } => {
+            use crate::task::actions::handle::{create_pipe_handles, create_task, transfer_handle};
+            use crate::task::actions::io::{close_sync, read_sync};
+            use crate::task::actions::lifecycle::add_args;
+
+            logger.log("ISA driver: ");
+            logger.log(path.as_str());
+            logger.log("\n");
+
+            let (response_reader, response_writer) = create_pipe_handles();
+
+            let (_, driver_task) = create_task();
+            transfer_handle(response_writer, driver_task);
+
+            let irq_str = alloc::format!("{}", irq);
+            add_args(driver_task, [path.as_str(), irq_str.as_str()]);
+
+            crate::exec::exec_program(driver_task, path.as_str()).unwrap();
+
+            // Wait for ready signal
+            let _ = read_sync(response_reader, &mut [0u8], 0);
+            let _ = close_sync(response_reader);
         }
         Directive::Pci {
             vendor_id,

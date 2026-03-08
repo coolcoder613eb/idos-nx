@@ -1,12 +1,7 @@
-use crate::arch::port::Port;
-use crate::task::actions::{yield_coop, sleep};
+use crate::port::Port;
+use idos_api::syscall::{exec::yield_coop, time::sleep_ms};
 
-/// A single floppy controller chip may be responsible for multiple drives.
-/// If it is currently in use by one drive, it cannot be used by the other 
-/// until the current operation completes. To achieve this, a single locked
-/// controller instance will be shared between all floppy drivers.
 pub struct FloppyController {
-    // Track if the motor has spun up for each drive
     pub motor_on: [bool; 2],
 }
 
@@ -48,15 +43,10 @@ impl FloppyController {
             DriveSelect::Secondary => (1, 0x20),
         };
         self.dor_write(dor | flag);
-        sleep(300);
+        sleep_ms(300);
         self.motor_on[index] = true;
     }
-    
-    /// The RQM bit indicates that a driver can now read or write data at the FIFO
-    /// register. Many procedures involve looping over status register reads,
-    /// waiting for the RQM bit to be set. This procedure will yield between reads
-    /// so as to not block other processes, and will timeout after a number of
-    /// attempts.
+
     fn wait_for_rqm(&self) -> Result<(), ControllerError> {
         let mut retry_count = 10;
         let mut ready = false;
@@ -89,11 +79,6 @@ impl FloppyController {
         Ok(())
     }
 
-    /// Attempt to read response bytes and copy them to a mutable slice.
-    /// If it succeeds, it will return an `Ok` Response containing the number of
-    /// bytes copied to the `response` slice.
-    /// If it fails, it will return an `Err` response, and the entire command will
-    /// need to be retried.
     pub fn get_response(&self, response: &mut [u8]) -> Result<usize, ControllerError> {
         self.wait_for_rqm()?;
         let mut has_response = self.get_status() & 0x50 == 0x50;
@@ -117,19 +102,13 @@ impl FloppyController {
 
 #[repr(u8)]
 pub enum Command {
-    ReadTrack = 0x02,
-    Specify = 0x03,
-    SenseDriveStatus = 0x04,
-    WriteData = 0x05 | 0x40,
     ReadData = 0x06 | 0x40,
+    Specify = 0x03,
+    WriteData = 0x05 | 0x40,
     Recalibrate = 0x07,
     SenseInterrupt = 0x08,
-    WriteDeletedData = 0x09,
-    ReadID = 0x0a,
-    Seek = 0x0f,
     Version = 0x10,
     Configure = 0x13,
-    Unlock = 0x14,
     Lock = 0x94,
 }
 
@@ -138,7 +117,7 @@ pub enum ControllerError {
     InvalidResponse,
     NotReadyForParam,
     ReadyTimeout,
-    UnsupportedController
+    UnsupportedController,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -147,8 +126,6 @@ pub enum DriveSelect {
     Secondary,
 }
 
-/// The DriveType enum will determine what kind of drives (if any) are attached
-/// to the controller.
 pub enum DriveType {
     None,
     Capacity360K,
@@ -170,9 +147,6 @@ impl DriveType {
         }
     }
 
-    /// Read CMOS register 0x10 to determine which floppy devices are attached
-    /// to the current system.
-    /// Returns the type of the primary and secondary drive
     pub fn read_cmos() -> [Self; 2] {
         Port::new(0x70).write_u8(0x10);
         let cmos_value = Port::new(0x71).read_u8();
@@ -195,4 +169,3 @@ impl core::fmt::Display for DriveType {
         }
     }
 }
-
