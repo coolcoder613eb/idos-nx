@@ -1,5 +1,3 @@
-use core::sync::atomic::Ordering;
-
 use super::{AsyncOpQueue, IOProvider, OpIdGenerator, UnmappedAsyncOp};
 use crate::{
     io::{async_io::AsyncOpID, handle::Handle},
@@ -105,13 +103,14 @@ impl IOProvider for MessageIOProvider {
 
         match self.run_op(provider_index, id) {
             Some(result) => {
-                self.remove_op(id);
+                let unmapped = self.remove_op(id);
                 let return_value = match result {
                     Ok(inner) => inner & 0x7fffffff,
                     Err(inner) => Into::<u32>::into(inner) | 0x80000000,
                 };
-                op.return_value.store(return_value, Ordering::SeqCst);
-                op.signal.store(1, Ordering::SeqCst);
+                if let Some(unmapped) = unmapped {
+                    unmapped.complete(return_value);
+                }
             }
             None => (),
         }
