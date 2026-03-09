@@ -18,6 +18,34 @@ pub const MS_PER_TICK: u32 = (HUNDRED_NS_PER_TICK / 10000) as u32;
 /// used for relative time offsets within various kernel internals.
 static SYSTEM_TICKS: AtomicU32 = AtomicU32::new(0);
 
+/// CPU time accounting: each tick (10ms) is attributed to one of these buckets
+/// based on what the timer interrupt interrupted.
+static USER_TICKS: AtomicU32 = AtomicU32::new(0);
+static KERNEL_TICKS: AtomicU32 = AtomicU32::new(0);
+static IDLE_TICKS: AtomicU32 = AtomicU32::new(0);
+
+/// Record one tick of CPU time in the appropriate bucket.
+/// `is_user`: interrupted ring 3 or VM86 code
+/// `is_idle`: interrupted the idle task
+pub fn record_cpu_tick(is_user: bool, is_idle: bool) {
+    if is_user {
+        USER_TICKS.fetch_add(1, Ordering::Relaxed);
+    } else if is_idle {
+        IDLE_TICKS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        KERNEL_TICKS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Returns (user_ticks, kernel_ticks, idle_ticks).
+pub fn get_cpu_ticks() -> (u32, u32, u32) {
+    (
+        USER_TICKS.load(Ordering::Relaxed),
+        KERNEL_TICKS.load(Ordering::Relaxed),
+        IDLE_TICKS.load(Ordering::Relaxed),
+    )
+}
+
 /// Store a known fixed point in time, sourced from CMOS RTC, a NTP service, or
 /// something similar. We use the programmable timer to update an offset
 /// relative to this number.

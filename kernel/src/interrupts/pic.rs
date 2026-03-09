@@ -111,7 +111,12 @@ pub extern "C" fn _handle_pic_interrupt(_registers: SavedState, irq: u32, frame:
         // interrupt handler
         handle_pit_interrupt();
 
+        // CPU time accounting: attribute this tick based on what we interrupted
+        let is_user = frame.cs & 3 != 0 || frame.eflags & 0x20000 != 0;
         let scheduler = get_cpu_scheduler();
+        let is_idle = scheduler.get_current_task() == scheduler.get_idle_task();
+        crate::time::system::record_cpu_tick(is_user, is_idle);
+
         if scheduler.has_lapic {
             get_lapic().broadcast_ipi(0xf0);
         }

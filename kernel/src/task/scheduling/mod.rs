@@ -72,6 +72,10 @@ impl CPUScheduler {
         self.current_task.load(Ordering::SeqCst)
     }
 
+    pub fn get_idle_task(&self) -> TaskID {
+        self.idle_task
+    }
+
     pub fn get_next_work_item(&self) -> Option<WorkItem> {
         self.work_queue.lock().pop_front()
     }

@@ -85,19 +85,16 @@ impl SysFS {
     }
 
     fn generate_cpu_content() -> String {
-        let mut content = String::new();
-
-        let user_time = 0;
-        let kernel_time = 0;
-        let idle_time = 0;
-        content.push_str(&alloc::format!(
-            "CPU Usage:\nUser Time: {}\nKernel Time: {}\nIdle Time: {}",
-            user_time,
-            kernel_time,
-            idle_time
-        ));
-
-        content
+        let (user_ticks, kernel_ticks, idle_ticks) = crate::time::system::get_cpu_ticks();
+        let total = user_ticks + kernel_ticks + idle_ticks;
+        let ms_per_tick = crate::time::system::MS_PER_TICK as u32;
+        alloc::format!(
+            "CPU Usage:\nUser Time: {} ms\nKernel Time: {} ms\nIdle Time: {} ms\nTotal Ticks: {}",
+            user_ticks * ms_per_tick,
+            kernel_ticks * ms_per_tick,
+            idle_ticks * ms_per_tick,
+            total,
+        )
     }
 
     fn generate_drives_content() -> String {
