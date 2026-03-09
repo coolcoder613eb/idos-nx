@@ -32,6 +32,7 @@ extern "x86-interrupt" {
 
     fn syscall_handler(frame: StackFrame) -> ();
     fn gpf_exception(frame: StackFrame, error: u32) -> ();
+    fn debug_exception(frame: StackFrame) -> ();
 }
 
 /// An IDT Entry tells the x86 CPU how to handle an interrupt.
@@ -129,7 +130,7 @@ pub unsafe fn init_idt() {
     // interrupts when triggered. If we make the kernel interrupt-safe, these
     // can be updated to tasks and made interruptable themselves.
     IDT[0x00].set_handler(exceptions::div);
-    IDT[0x01].set_handler(exceptions::debug);
+    IDT[0x01].set_handler(debug_exception);
     IDT[0x02].set_handler(exceptions::nmi);
     IDT[0x03].set_handler(exceptions::breakpoint);
     IDT[0x04].set_handler(exceptions::overflow);

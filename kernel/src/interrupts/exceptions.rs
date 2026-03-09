@@ -19,11 +19,10 @@ pub extern "x86-interrupt" fn div(_stack_frame: StackFrame) {
     exception();
 }
 
-/// Debug trap used for a number of tracing modes like single-step
-#[no_mangle]
+/*#[no_mangle]
 pub extern "x86-interrupt" fn debug(_stack_frame: StackFrame) {
     panic!("Debug trap");
-}
+}*/
 
 #[no_mangle]
 pub extern "x86-interrupt" fn nmi(_stack_frame: StackFrame) {
@@ -197,6 +196,81 @@ gpf_exception:
 "#
 );
 
+// Debug trap (#DB) — no error code pushed by CPU, so the stack frame
+// starts directly after the saved GP registers.
+global_asm!(
+    r#"
+.global debug_exception
+
+debug_exception:
+    push eax
+    push ecx
+    push edx
+    push ebx
+    push ebp
+    push esi
+    push edi
+    mov ebx, esp
+    push ebx
+    add ebx, 7 * 4
+    push ebx
+
+    call _debug_exception_inner
+"#
+);
+
+/// Save the current VM86 state into the VMRegisters struct and restore
+/// the protected-mode context from before enter_vm86, returning to doslayer.
+/// This is used by both the GPF and debug trap handlers.
+fn exit_vm86(stack_frame: &StackFrame, registers: &SavedRegisters, exit_reason: u32) -> ! {
+    let stored_regs = crate::task::switching::get_current_task()
+        .write()
+        .vm86_registers
+        .take();
+    if let Some(mut prev_regs) = stored_regs {
+        // Set the exit reason in eax so the caller of enter_8086 can read it
+        prev_regs.eax = exit_reason;
+        let vm_regs_ptr = prev_regs.ebx as *mut VMRegisters;
+        unsafe {
+            let vm_regs = &mut *vm_regs_ptr;
+            vm_regs.eax = registers.eax;
+            vm_regs.ecx = registers.ecx;
+            vm_regs.edx = registers.edx;
+            vm_regs.ebx = registers.ebx;
+            vm_regs.esi = registers.esi;
+            vm_regs.edi = registers.edi;
+            vm_regs.ebp = registers.ebp;
+
+            vm_regs.eip = stack_frame.eip;
+            vm_regs.cs = stack_frame.cs;
+            vm_regs.eflags = stack_frame.eflags;
+
+            let stack_frame_ptr = stack_frame as *const StackFrame as *const u32;
+            vm_regs.esp = core::ptr::read_volatile(stack_frame_ptr.add(3));
+            vm_regs.ss = core::ptr::read_volatile(stack_frame_ptr.add(4));
+            vm_regs.es = core::ptr::read_volatile(stack_frame_ptr.add(5));
+            vm_regs.ds = core::ptr::read_volatile(stack_frame_ptr.add(6));
+            vm_regs.fs = core::ptr::read_volatile(stack_frame_ptr.add(7));
+            vm_regs.gs = core::ptr::read_volatile(stack_frame_ptr.add(8));
+
+            asm!(
+                "mov esp, eax",
+                "pop edi",
+                "pop esi",
+                "pop ebp",
+                "pop ebx",
+                "pop edx",
+                "pop ecx",
+                "pop eax",
+                "iretd",
+                in("eax") &prev_regs as *const FullSavedRegisters
+            );
+        }
+    }
+    crate::kprintln!("No previous regs. How did it get in 8086 mode?");
+    terminate(0);
+}
+
 #[no_mangle]
 pub extern "C" fn _gpf_exception_inner(
     stack_frame: &StackFrame,
@@ -207,58 +281,27 @@ pub extern "C" fn _gpf_exception_inner(
     crate::kprintln!("{:?}", stack_frame);
 
     if stack_frame.eflags & 0x20000 != 0 {
-        // VM86 Mode
-        // return to the callsite of the enter_8086 syscall
-        let stored_regs = crate::task::switching::get_current_task()
-            .write()
-            .vm86_registers
-            .take();
-        if let Some(prev_regs) = stored_regs {
-            let vm_regs_ptr = prev_regs.ebx as *mut VMRegisters;
-            unsafe {
-                let vm_regs = &mut *vm_regs_ptr;
-                vm_regs.eax = registers.eax;
-                vm_regs.ecx = registers.ecx;
-                vm_regs.edx = registers.edx;
-                vm_regs.ebx = registers.ebx;
-                vm_regs.esi = registers.esi;
-                vm_regs.edi = registers.edi;
-                vm_regs.ebp = registers.ebp;
-
-                vm_regs.eip = stack_frame.eip;
-                vm_regs.cs = stack_frame.cs;
-                vm_regs.eflags = stack_frame.eflags;
-
-                let stack_frame_ptr = stack_frame as *const StackFrame as *const u32;
-                vm_regs.esp = core::ptr::read_volatile(stack_frame_ptr.add(3));
-                vm_regs.ss = core::ptr::read_volatile(stack_frame_ptr.add(4));
-                vm_regs.es = core::ptr::read_volatile(stack_frame_ptr.add(5));
-                vm_regs.ds = core::ptr::read_volatile(stack_frame_ptr.add(6));
-                vm_regs.fs = core::ptr::read_volatile(stack_frame_ptr.add(7));
-                vm_regs.gs = core::ptr::read_volatile(stack_frame_ptr.add(8));
-
-                asm!(
-                    "mov esp, eax",
-                    "pop edi",
-                    "pop esi",
-                    "pop ebp",
-                    "pop ebx",
-                    "pop edx",
-                    "pop ecx",
-                    "pop eax",
-                    "iretd",
-                    in("eax") &prev_regs as *const FullSavedRegisters
-                );
-            }
-        } else {
-            crate::kprintln!("No previous regs. How did it get in 8086 mode?");
-            terminate(0);
-        }
+        exit_vm86(stack_frame, registers, idos_api::compat::VM86_EXIT_GPF);
     }
     if stack_frame.eip >= 0xc0000000 {
         crate::kprintln!("Kernel GPF");
     }
     let current_task_id = get_current_id();
     crate::kprintln!("Terminate task {:?}", current_task_id);
+    terminate(0);
+}
+
+#[no_mangle]
+pub extern "C" fn _debug_exception_inner(
+    stack_frame: &StackFrame,
+    registers: &mut SavedRegisters,
+) -> ! {
+    if stack_frame.eflags & 0x20000 != 0 {
+        // VM86 mode — exit back to doslayer
+        exit_vm86(stack_frame, registers, idos_api::compat::VM86_EXIT_DEBUG);
+    }
+
+    let eip = stack_frame.eip;
+    crate::kprintln!("Debug trap at {:#010X}", eip);
     terminate(0);
 }

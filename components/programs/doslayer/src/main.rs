@@ -286,12 +286,21 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
     let _ = open_sync(stdaux, "DEV:\\COM1", 0);
 
     loop {
-        idos_api::syscall::exec::enter_8086(&mut vm_regs);
+        let exit_reason = idos_api::syscall::exec::enter_8086(&mut vm_regs, 0);
 
-        unsafe {
-            if !handle_fault(&mut vm_regs) {
-                break;
+        match exit_reason {
+            idos_api::compat::VM86_EXIT_GPF => unsafe {
+                if !handle_fault(&mut vm_regs) {
+                    break;
+                }
+            },
+            idos_api::compat::VM86_EXIT_DEBUG => {
+                // Hardware interrupt delivery — TF was set by the kernel
+                // Clear TF from the saved eflags so we don't keep trapping
+                vm_regs.eflags &= !0x100;
+                // TODO: deliver pending virtual interrupts
             }
+            _ => break,
         }
     }
 

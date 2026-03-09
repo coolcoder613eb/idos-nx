@@ -253,7 +253,8 @@ pub extern "C" fn _syscall_inner(registers: &mut FullSavedRegisters) {
             // If a GPF is found to have started in the VM, we can restore the
             // registers and IRET, returning to the callsite in userspace.
             let regs_ptr = registers.ebx as *mut VMRegisters;
-            crate::task::actions::vm::enter_vm86_mode(registers, regs_ptr);
+            let irq_mask = registers.ecx;
+            crate::task::actions::vm::enter_vm86_mode(registers, regs_ptr, irq_mask);
         }
 
         // IO Actions

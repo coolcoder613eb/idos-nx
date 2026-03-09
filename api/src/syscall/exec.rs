@@ -31,6 +31,6 @@ pub fn load_executable(task_id: u32, path: &str) -> bool {
     result != 0xffff_ffff
 }
 
-pub fn enter_8086(regs: &mut VMRegisters) {
-    super::syscall(0x07, regs as *mut VMRegisters as u32, 0, 0);
+pub fn enter_8086(regs: &mut VMRegisters, flags: u32) -> u32 {
+    super::syscall(0x07, regs as *mut VMRegisters as u32, flags, 0)
 }

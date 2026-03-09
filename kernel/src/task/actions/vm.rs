@@ -4,10 +4,14 @@ use crate::{interrupts::syscall::FullSavedRegisters, task::switching::get_curren
 
 use core::arch::asm;
 
-pub fn enter_vm86_mode(registers: &FullSavedRegisters, vm_regs_ptr: *mut VMRegisters) {
+pub fn enter_vm86_mode(registers: &FullSavedRegisters, vm_regs_ptr: *mut VMRegisters, irq_mask: u32) {
     let task_lock = get_current_task();
 
-    task_lock.write().vm86_registers = Some(registers.clone());
+    {
+        let mut task = task_lock.write();
+        task.vm86_registers = Some(registers.clone());
+        task.vm86_irq_mask = irq_mask;
+    }
 
     let vm_regs = unsafe { &mut *vm_regs_ptr };
     vm_regs.eflags |= 0x20000;

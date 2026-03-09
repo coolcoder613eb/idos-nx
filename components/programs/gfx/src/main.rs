@@ -254,7 +254,7 @@ fn video_bios_interrupt(function: u16, regs: &mut VMRegisters, stack_top: u32) {
     }
 
     loop {
-        enter_8086(regs);
+        enter_8086(regs, 0);
 
         unsafe {
             let mut op_ptr = ((regs.cs << 4) + regs.eip) as *const u8;

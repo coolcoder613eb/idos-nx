@@ -102,6 +102,8 @@ pub struct Task {
 
     /// Storage for the task's registers when it enters VM86 mode
     pub vm86_registers: Option<FullSavedRegisters>,
+    /// IRQ bitmask for virtual interrupt delivery in VM86 mode
+    pub vm86_irq_mask: u32,
 
     /// FPU/SSE register state, saved and restored on every context switch
     pub fpu_state: FxState,
@@ -127,6 +129,7 @@ impl Task {
             async_io_table: AsyncIOTable::new(),
             last_map_result: None,
             vm86_registers: None,
+            vm86_irq_mask: 0,
             fpu_state: FxState::new(),
         }
     }

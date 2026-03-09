@@ -1,3 +1,11 @@
+/// Exit reasons returned by enter_8086 syscall
+pub const VM86_EXIT_GPF: u32 = 0;
+pub const VM86_EXIT_DEBUG: u32 = 1;
+
+/// IRQ mask for enter_8086 syscall — bit N = deliver IRQ N as a virtual interrupt
+pub const VM86_IRQ_TIMER: u32 = 1 << 0;
+pub const VM86_IRQ_KEYBOARD: u32 = 1 << 1;
+
 #[derive(Clone)]
 pub struct VMRegisters {
     pub eax: u32,
