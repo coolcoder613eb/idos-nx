@@ -20,6 +20,30 @@ gopher := target/i386-idos/release/gopher
 tonegen := target/i386-idos/release/tonegen
 
 kernel_build_flags := --release -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target i386-kernel.json
+idos_build_flags := -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+
+# Per-crate source tracking — shared libs that most crates depend on
+src_api := $(shell find api/src -name '*.rs') api/Cargo.toml
+src_sdk := $(shell find sdk/src -name '*.rs') sdk/Cargo.toml
+src_shared := $(src_api) $(src_sdk)
+
+src_kernel := $(shell find kernel/src -name '*.rs') kernel/Cargo.toml $(src_api)
+src_bootmbr := $(shell find bootloader/mbr/src -name '*.rs') bootloader/mbr/Cargo.toml
+src_bootbin := $(shell find bootloader/bootbin/src -name '*.rs') bootloader/bootbin/Cargo.toml
+
+src_command := $(shell find components/programs/command/src -name '*.rs') components/programs/command/Cargo.toml $(src_shared)
+src_doslayer := $(shell find components/programs/doslayer/src -name '*.rs') components/programs/doslayer/Cargo.toml $(src_shared)
+src_elfload := $(shell find components/programs/elfload/src -name '*.rs') components/programs/elfload/Cargo.toml $(src_api)
+src_colordemo := $(shell find components/programs/colordemo/src -name '*.rs') components/programs/colordemo/Cargo.toml $(src_shared)
+src_diskchk := $(shell find components/programs/diskchk/src -name '*.rs') components/programs/diskchk/Cargo.toml $(src_shared)
+src_gfx := $(shell find components/programs/gfx/src -name '*.rs') components/programs/gfx/Cargo.toml $(src_shared)
+src_tonegen := $(shell find components/programs/tonegen/src -name '*.rs') components/programs/tonegen/Cargo.toml $(src_shared)
+src_netcat := $(shell find components/programs/netcat/src -name '*.rs') components/programs/netcat/Cargo.toml $(src_shared)
+src_gopher := $(shell find components/programs/gopher/src -name '*.rs') components/programs/gopher/Cargo.toml $(src_shared)
+src_fatdrv := $(shell find components/drivers/fatdriver/src -name '*.rs') components/drivers/fatdriver/Cargo.toml $(src_api)
+src_e1000 := $(shell find components/drivers/e1000/src -name '*.rs') components/drivers/e1000/Cargo.toml $(src_shared)
+src_floppy := $(shell find components/drivers/floppy/src -name '*.rs') components/drivers/floppy/Cargo.toml $(src_shared)
+src_sb16 := $(shell find components/drivers/sb16/src -name '*.rs') components/drivers/sb16/Cargo.toml $(src_shared)
 
 qemu_flags := -m 64M -drive format=raw,file=$(diskimage) -serial stdio \
 	-fda $(userdata) -device floppy,unit=1,drive= \
@@ -76,19 +100,19 @@ bootdisk: $(command) $(diskchk) $(doslayer) $(elfload) $(fatdrv) $(gfx) $(e1000)
 	@mcopy -D o -i $(diskimage) resources/ter-i14n.psf ::TERM14.PSF
 	@mcopy -D o -i $(diskimage) resources/DRIVERS.CFG ::DRIVERS.CFG
 
-$(bootsector):
+$(bootsector): $(src_bootmbr)
 	@mkdir -p $(shell dirname $@)
 	@cd bootloader/mbr && \
 	cargo build --release -Zbuild-std=core -Zbuild-std-features=compiler-builtins-mem --target i386-mbr.json
 	@objcopy -I elf32-i386 -O binary target/i386-mbr/release/idos-mbr $(bootsector)
 
-$(bootbin):
+$(bootbin): $(src_bootbin)
 	@mkdir -p $(shell dirname $@)
 	@cd bootloader/bootbin && \
 	cargo build --release -Zbuild-std=core -Zbuild-std-features=compiler-builtins-mem --target i386-bootbin.json
 	@objcopy -I elf32-i386 -O binary target/i386-bootbin/release/idos-bootbin $(bootbin)
 
-$(kernel):
+$(kernel): $(src_kernel)
 	@mkdir -p $(shell dirname $@)
 	@cd kernel && \
 	cargo build $(kernel_build_flags)
@@ -103,61 +127,61 @@ testkernel:
 
 test: testkernel run
 
-$(command):
+$(command): $(src_command)
 	@cd components/programs/command && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(doslayer):
+$(doslayer): $(src_doslayer)
 	@cd components/programs/doslayer && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(elfload):
+$(elfload): $(src_elfload)
 	@cd components/programs/elfload && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(colordemo):
+$(colordemo): $(src_colordemo)
 	@cd components/programs/colordemo && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(diskchk):
+$(diskchk): $(src_diskchk)
 	@cd components/programs/diskchk && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(fatdrv_elf):
+$(fatdrv_elf): $(src_fatdrv)
 	@cd components/drivers/fatdriver && \
-	cargo build --features idos -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build --features idos $(idos_build_flags)
 
 $(fatdrv): $(fatdrv_elf)
 	@mkdir -p $(shell dirname $@)
 	@objcopy -I elf32-i386 -O binary $(fatdrv_elf) $(fatdrv)
 
-$(gfx):
+$(gfx): $(src_gfx)
 	@cd components/programs/gfx && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(e1000):
+$(e1000): $(src_e1000)
 	@cd components/drivers/e1000 && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(floppy):
+$(floppy): $(src_floppy)
 	@cd components/drivers/floppy && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(sb16):
+$(sb16): $(src_sb16)
 	@cd components/drivers/sb16 && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(tonegen):
+$(tonegen): $(src_tonegen)
 	@cd components/programs/tonegen && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(netcat):
+$(netcat): $(src_netcat)
 	@cd components/programs/netcat && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
-$(gopher):
+$(gopher): $(src_gopher)
 	@cd components/programs/gopher && \
-	cargo build -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem --target ../../i386-idos.json --release
+	cargo build $(idos_build_flags)
 
 logview:
 	cargo build -p logview --release

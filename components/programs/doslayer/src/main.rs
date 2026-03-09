@@ -271,6 +271,30 @@ _start:
 static mut TERMIOS_ORIG: Termios = Termios::default();
 static STDIN: Handle = Handle::new(0);
 static KBD_HANDLE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static LOG_HANDLE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn dos_log(msg: &[u8]) {
+    let h = LOG_HANDLE.load(core::sync::atomic::Ordering::Relaxed);
+    if h != 0 {
+        let _ = write_sync(Handle::new(h), msg, 0);
+    }
+}
+
+/// Format "PREFIX XX\n" where XX is a hex byte.
+fn fmt_unsupported(prefix: &[u8], value: u8, buf: &mut [u8; 32]) -> usize {
+    let hex = b"0123456789ABCDEF";
+    let mut i = 0;
+    for &b in prefix {
+        buf[i] = b;
+        i += 1;
+    }
+    buf[i] = hex[(value >> 4) as usize];
+    i += 1;
+    buf[i] = hex[(value & 0xf) as usize];
+    i += 1;
+    buf[i] = b'\n';
+    i + 1
+}
 /// IRQ mask passed to enter_8086, built up as the DOS program sets interrupt vectors
 static mut VM86_IRQ_MASK: u32 = 0;
 /// Virtual interrupt flag — tracks whether the DOS program has done CLI/STI
@@ -301,10 +325,7 @@ fn enter_graphics_mode(width: u16, height: u16, bpp: u8) {
 
     let pixel_bytes = width as u32 * height as u32 * ((bpp as u32 + 7) / 8);
 
-    // Map shadow RAM at 0xA0000 first — the v86 program will write here
-    // regardless of whether we successfully set up the IDOS graphics buffer.
-    let shadow_size = (pixel_bytes + 0xfff) & !0xfff;
-    let _ = map_memory(Some(0xA0000), shadow_size, None);
+    // Shadow RAM at 0xA0000 is already mapped by setup_dos_memory.
 
     let mut gfx_mode = GraphicsMode {
         width,
@@ -499,6 +520,14 @@ fn setup_dos_memory() {
     let pages = (dos_region_size + 0xfff) / 0x1000;
     let _ = map_memory(Some(PSP_BASE), pages * 0x1000, None);
 
+    // Map the video memory area (0xA0000-0xBFFFF) as shadow RAM.
+    // Programs write here thinking it's VGA memory; we intercept and composite.
+    let _ = map_memory(Some(0x000A_0000), 0x2_0000, None);
+
+    // Identity-map BIOS ROM area (0xC0000-0xFFFFF) so programs can read
+    // video BIOS, system BIOS, and other ROM data.
+    let _ = map_memory(Some(0x000C_0000), 0x4_0000, Some(0x000C_0000));
+
     // Place an IRET instruction at the stub address
     unsafe {
         core::ptr::write_volatile(IRET_STUB as *mut u8, 0xCF); // IRET
@@ -511,6 +540,62 @@ fn setup_dos_memory() {
             core::ptr::write_volatile(ivt.add(i * 2), IRET_STUB_OFFSET);
             core::ptr::write_volatile(ivt.add(i * 2 + 1), IRET_STUB_SEGMENT);
         }
+    }
+
+    // Populate the BIOS Data Area (BDA) at 0x0040:0x0000 (linear 0x400)
+    // Programs (especially Watcom's graph.lib) read these to determine
+    // screen geometry. All-zero BDA causes divide-by-zero crashes.
+    unsafe {
+        let bda = 0x400 as *mut u8;
+        // 0x449: current video mode (03h = 80x25 text)
+        core::ptr::write_volatile(bda.add(0x49), 0x03);
+        // 0x44A-0x44B: number of screen columns (80)
+        core::ptr::write_volatile((bda.add(0x4A)) as *mut u16, 80);
+        // 0x44C-0x44D: video page size in bytes (4000 = 80*25*2)
+        core::ptr::write_volatile((bda.add(0x4C)) as *mut u16, 4000);
+        // 0x44E-0x44F: current page offset (0)
+        core::ptr::write_volatile((bda.add(0x4E)) as *mut u16, 0);
+        // 0x450-0x45F: cursor positions for 8 pages (row, col pairs) — leave zero
+        // 0x460-0x461: cursor shape (start/end scanlines)
+        core::ptr::write_volatile(bda.add(0x60), 0x0D); // end scanline
+        core::ptr::write_volatile(bda.add(0x61), 0x0C); // start scanline
+        // 0x462: current display page (0)
+        core::ptr::write_volatile(bda.add(0x62), 0);
+        // 0x463-0x464: CRT controller base port (0x3D4 for color)
+        core::ptr::write_volatile((bda.add(0x63)) as *mut u16, 0x3D4);
+        // 0x484: rows on screen minus 1 (24 for 25-row display)
+        core::ptr::write_volatile(bda.add(0x84), 24);
+        // 0x485-0x486: character height in scanlines (16 for VGA)
+        core::ptr::write_volatile((bda.add(0x85)) as *mut u16, 16);
+        // 0x487: EGA/VGA misc info
+        core::ptr::write_volatile(bda.add(0x87), 0x60);
+        // 0x489: VGA mode set option control
+        core::ptr::write_volatile(bda.add(0x89), 0x11);
+    }
+}
+
+/// Update BDA fields when the video mode changes.
+fn update_bda_for_mode(mode: u8) {
+    unsafe {
+        let bda = 0x400 as *mut u8;
+        core::ptr::write_volatile(bda.add(0x49), mode);
+        match mode {
+            0x13 => {
+                // 320x200x256
+                core::ptr::write_volatile((bda.add(0x4A)) as *mut u16, 40); // columns
+                core::ptr::write_volatile((bda.add(0x4C)) as *mut u16, 0); // page size (N/A)
+                core::ptr::write_volatile(bda.add(0x84), 24); // rows - 1
+            }
+            _ => {
+                // 80x25 text
+                core::ptr::write_volatile((bda.add(0x4A)) as *mut u16, 80);
+                core::ptr::write_volatile((bda.add(0x4C)) as *mut u16, 4000);
+                core::ptr::write_volatile(bda.add(0x84), 24);
+            }
+        }
+        // Reset cursor and page
+        core::ptr::write_volatile((bda.add(0x4E)) as *mut u16, 0);
+        core::ptr::write_volatile(bda.add(0x62), 0);
     }
 }
 
@@ -686,6 +771,10 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
     let _ = open_sync(kbd, "DEV:\\KEYBOARD", 0);
     KBD_HANDLE.store(kbd.as_u32(), core::sync::atomic::Ordering::Relaxed);
 
+    let log = create_file_handle();
+    let _ = open_sync(log, "LOG:\\DOSLAYER", 0);
+    LOG_HANDLE.store(log.as_u32(), core::sync::atomic::Ordering::Relaxed);
+
     loop {
         let irq_mask = unsafe {
             if VM86_IF { VM86_IRQ_MASK } else { 0 }
@@ -697,7 +786,6 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
                 if !handle_fault(&mut vm_regs) {
                     break;
                 }
-                sync_graphics_buffer();
             },
             idos_api::compat::VM86_EXIT_DEBUG => {
                 // Hardware interrupt delivery — TF was set by the kernel
@@ -779,6 +867,8 @@ unsafe fn handle_fault(vm_regs: &mut VMRegisters) -> bool {
             // INT nn
             let irq = *op_ptr.add(1);
             handle_interrupt(irq, vm_regs);
+            sync_graphics_buffer();
+            idos_api::syscall::exec::yield_coop();
             vm_regs.eip += 2;
         }
         0xcf => {
@@ -974,8 +1064,11 @@ fn handle_interrupt(irq: u8, vm_regs: &mut VMRegisters) {
             dos_api(vm_regs);
         }
 
-        // TODO: jump to the value in the IVT, or fail if there is no irq
-        _ => (),
+        _ => {
+            let mut buf = [0u8; 32];
+            let len = fmt_unsupported(b"INT ", irq, &mut buf);
+            dos_log(&buf[..len]);
+        }
     }
 }
 
@@ -995,11 +1088,13 @@ fn bios_video(regs: &mut VMRegisters) {
                             exit_graphics_mode();
                         }
                     }
+                    update_bda_for_mode(0x03);
                     let _ = write_sync(stdout, b"\x1B[2J\x1B[H", 0);
                 }
                 0x13 => {
                     // 320x200x256 (mode 13h)
                     enter_graphics_mode(320, 200, 8);
+                    update_bda_for_mode(0x13);
                 }
                 _ => {}
             }
@@ -1048,7 +1143,42 @@ fn bios_video(regs: &mut VMRegisters) {
             // AH=10: Palette / DAC functions
             bios_palette(regs);
         }
-        _ => {}
+        0x12 => {
+            // AH=12h: Alternate select — VGA capability queries
+            let bl = regs.bl();
+            match bl {
+                0x10 => {
+                    // BL=10h: Get EGA info — return VGA-compatible values
+                    regs.ebx = (regs.ebx & 0xffff0000) | 0x0003; // BH=0 (color), BL=3 (256K)
+                    regs.ecx = (regs.ecx & 0xffff0000) | 0x0009; // CH=0 (feature bits), CL=9 (EGA switches)
+                }
+                0x30 => {
+                    // BL=30h: Set vertical resolution / text rows
+                    // AL=12h means success (VGA present)
+                    regs.set_al(0x12);
+                }
+                _ => {
+                    // Return AL=12h to indicate VGA is present
+                    regs.set_al(0x12);
+                }
+            }
+        }
+        0x1A => {
+            // AH=1Ah: Display combination code
+            // AL=00: Get display combination
+            if regs.al() == 0x00 {
+                // AL=1Ah means function supported (VGA)
+                regs.set_al(0x1A);
+                // BL=active display code: 08h = VGA color
+                // BH=inactive display: 00h = none
+                regs.ebx = (regs.ebx & 0xffff0000) | 0x0008;
+            }
+        }
+        _ => {
+            let mut buf = [0u8; 32];
+            let len = fmt_unsupported(b"INT 10h AH=", regs.ah(), &mut buf);
+            dos_log(&buf[..len]);
+        }
     }
 }
 
@@ -1062,9 +1192,9 @@ fn bios_palette(regs: &mut VMRegisters) {
             if idx < 256 {
                 unsafe {
                     // VGA DAC values are 6-bit (0-63), scale to 8-bit
-                    VGA_PALETTE[idx * 3] = ((regs.dh() as u16 * 255 / 63) as u8);
-                    VGA_PALETTE[idx * 3 + 1] = ((regs.ch() as u16 * 255 / 63) as u8);
-                    VGA_PALETTE[idx * 3 + 2] = ((regs.cl() as u16 * 255 / 63) as u8);
+                    VGA_PALETTE[idx * 3] = (regs.dh() as u16 * 255 / 63) as u8;
+                    VGA_PALETTE[idx * 3 + 1] = (regs.ch() as u16 * 255 / 63) as u8;
+                    VGA_PALETTE[idx * 3 + 2] = (regs.cl() as u16 * 255 / 63) as u8;
                 }
                 push_idos_palette();
             }
@@ -1196,7 +1326,9 @@ fn dos_api(vm_regs: &mut VMRegisters) {
         0x66 => get_global_code_page(vm_regs),
         0x68 => commit_file(vm_regs),
         _ => {
-            // Unsupported — set carry flag to indicate error
+            let mut buf = [0u8; 32];
+            let len = fmt_unsupported(b"INT 21h AH=", vm_regs.ah(), &mut buf);
+            dos_log(&buf[..len]);
             vm_regs.eflags |= 1;
         }
     }
@@ -1224,9 +1356,6 @@ pub fn terminate(regs: &mut VMRegisters) {
 /// Output:
 ///     AL = character from STDIN
 pub fn read_stdin_with_echo(regs: &mut VMRegisters) {
-    // Flush any pending graphics before blocking on input
-    sync_graphics_buffer();
-
     let stdin = idos_api::io::handle::Handle::new(0);
     let stdout = idos_api::io::handle::Handle::new(1);
 
@@ -1546,7 +1675,6 @@ fn read_file(regs: &mut VMRegisters) {
     // canonical mode so the console buffers a full line.
     let is_stdin = dos_handle == 0;
     if is_stdin {
-        sync_graphics_buffer();
         set_stdin_canonical(true);
     }
 

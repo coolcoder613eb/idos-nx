@@ -80,13 +80,16 @@ impl CPUScheduler {
         self.work_queue.lock().push_back(item);
     }
 
-    pub fn tick(&self) {
-        // a tick is 1/100th of a second
-        let prev = self.current_ticks.fetch_add(1, Ordering::SeqCst);
-        if prev >= 100 {
-            crate::kprintln!("AP TICK");
-            self.current_ticks.store(0, Ordering::SeqCst);
+    /// Called every timer tick (10ms). Returns true if the current task's
+    /// time slice has expired.
+    pub fn tick(&self) -> bool {
+        let prev = self.current_ticks.fetch_add(1, Ordering::Relaxed);
+        if prev >= 1 {
+            // 2 ticks = 20ms time slice (~50Hz)
+            self.current_ticks.store(0, Ordering::Relaxed);
+            return true;
         }
+        false
     }
 }
 

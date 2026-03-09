@@ -103,7 +103,7 @@ pic_irq_core:
 
 /// Handle interrupts that come from the PIC
 #[no_mangle]
-pub extern "C" fn _handle_pic_interrupt(_registers: SavedState, irq: u32, _frame: StackFrame) {
+pub extern "C" fn _handle_pic_interrupt(_registers: SavedState, irq: u32, frame: StackFrame) {
     let pic = PIC::new();
 
     if irq == 0 {
@@ -111,11 +111,20 @@ pub extern "C" fn _handle_pic_interrupt(_registers: SavedState, irq: u32, _frame
         // interrupt handler
         handle_pit_interrupt();
 
-        if get_cpu_scheduler().has_lapic {
+        let scheduler = get_cpu_scheduler();
+        if scheduler.has_lapic {
             get_lapic().broadcast_ipi(0xf0);
         }
 
+        let should_preempt = scheduler.tick();
         pic.end_of_interrupt(0);
+
+        // Preempt if the time slice expired and we interrupted userspace
+        // (ring 3 or VM86 mode).
+        if should_preempt && (frame.cs & 3 != 0 || frame.eflags & 0x20000 != 0) {
+            crate::task::actions::yield_coop();
+        }
+
         return;
     }
 

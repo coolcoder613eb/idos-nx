@@ -14,7 +14,7 @@ pub fn enter_vm86_mode(registers: &FullSavedRegisters, vm_regs_ptr: *mut VMRegis
     }
 
     let vm_regs = unsafe { &mut *vm_regs_ptr };
-    vm_regs.eflags |= 0x20000;
+    vm_regs.eflags |= 0x20200; // VM flag (bit 17) + IF (bit 9)
 
     let vm_regs_copy = vm_regs.clone();
 
