@@ -53,6 +53,36 @@ impl VMRegisters {
     }
 
     pub fn dl(&self) -> u8 {
+        (self.edx & 0xff) as u8
+    }
+
+    pub fn dh(&self) -> u8 {
         ((self.edx & 0xff00) >> 8) as u8
+    }
+
+    pub fn bh(&self) -> u8 {
+        ((self.ebx & 0xff00) >> 8) as u8
+    }
+
+    pub fn bl(&self) -> u8 {
+        (self.ebx & 0xff) as u8
+    }
+
+    pub fn ch(&self) -> u8 {
+        ((self.ecx & 0xff00) >> 8) as u8
+    }
+
+    pub fn cl(&self) -> u8 {
+        (self.ecx & 0xff) as u8
+    }
+
+    pub fn set_cx(&mut self, cx: u16) {
+        self.ecx &= 0xffff0000;
+        self.ecx |= cx as u32;
+    }
+
+    pub fn set_dx(&mut self, dx: u16) {
+        self.edx &= 0xffff0000;
+        self.edx |= dx as u32;
     }
 }
