@@ -274,6 +274,10 @@ fn execute_directive(logger: &mut log::BufferedLogger, directive: &config::Direc
             logger.log("Initializing Net Stack...\n");
             net::start_net_stack();
         }
+        Directive::Timezone(offset) => {
+            logger.log("Setting timezone offset\n");
+            time::system::set_timezone_offset(*offset);
+        }
     }
 }
 

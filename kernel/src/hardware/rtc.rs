@@ -77,6 +77,8 @@ pub fn read_rtc_time() -> RtcTime {
             if pm {
                 time.hours += 12;
             }
+        } else {
+            time.hours = convert_bcd(time.hours);
         }
     } else {
         if !use_24_hour {

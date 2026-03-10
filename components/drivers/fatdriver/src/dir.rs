@@ -163,6 +163,11 @@ fn ascii_char_matches(a: u8, b: u8) -> bool {
     return a == b;
 }
 
+fn is_leap_year(year: u16) -> bool {
+    let y = year as u32;
+    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+}
+
 /// Encode a date/time into a timestamp (seconds since 1980-01-01).
 /// This is a standalone implementation so we don't depend on kernel time types.
 fn encode_timestamp(year: u16, month: u16, day: u16, hours: u16, minutes: u16, seconds: u16) -> u32 {
@@ -182,7 +187,10 @@ fn encode_timestamp(year: u16, month: u16, day: u16, hours: u16, minutes: u16, s
         days += 1;
     }
     days += MONTH_START_OFFSET[month as usize - 1];
-    days += day as u32;
+    if month > 2 && is_leap_year(year) {
+        days += 1; // leap day
+    }
+    days += day as u32 - 1;
 
     days * 86400 + hours as u32 * 3600 + minutes as u32 * 60 + seconds as u32
 }

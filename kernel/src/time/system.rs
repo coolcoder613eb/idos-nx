@@ -1,6 +1,6 @@
 //! Utilities for managing system time
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use spin::Mutex;
 
@@ -44,6 +44,15 @@ pub fn get_cpu_ticks() -> (u32, u32, u32) {
         KERNEL_TICKS.load(Ordering::Relaxed),
         IDLE_TICKS.load(Ordering::Relaxed),
     )
+}
+
+/// Timezone offset from UTC in minutes (e.g. -420 for UTC-7). Applied when
+/// converting system time to wall-clock time via `get_system_time()`.
+static TIMEZONE_OFFSET_MINUTES: AtomicI32 = AtomicI32::new(0);
+
+/// Set the timezone offset from UTC, in minutes.
+pub fn set_timezone_offset(minutes: i32) {
+    TIMEZONE_OFFSET_MINUTES.store(minutes, Ordering::Relaxed);
 }
 
 /// Store a known fixed point in time, sourced from CMOS RTC, a NTP service, or
@@ -177,8 +186,11 @@ pub fn get_system_time() -> TimestampHires {
     // TODO: mark this as critical, not to be interrupted
     let known = *KNOWN_TIME.lock();
     let offset = *TIME_OFFSET.lock();
+    let tz_minutes = TIMEZONE_OFFSET_MINUTES.load(Ordering::Relaxed) as i64;
+    let tz_100ns = tz_minutes * 60 * 10_000_000;
 
-    known + offset
+    let raw = known + offset;
+    TimestampHires(raw.0.wrapping_add(tz_100ns as u64))
 }
 
 pub fn get_offset_seconds() -> u64 {

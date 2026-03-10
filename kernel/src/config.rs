@@ -32,6 +32,8 @@ pub enum Directive {
     Console,
     /// Start the network stack
     Net,
+    /// Set timezone offset from UTC in minutes (e.g. -420 for UTC-7, 60 for UTC+1)
+    Timezone(i32),
 }
 
 /// Read and parse `C:\DRIVERS.CFG`, returning a list of directives.
@@ -161,6 +163,23 @@ fn parse_config(text: &str) -> Vec<Directive> {
             "net" => {
                 directives.push(Directive::Net);
             }
+            "timezone" => {
+                if parts.len() < 2 {
+                    LOGGER.log(format_args!("Config: 'timezone' missing offset: {}", line));
+                    continue;
+                }
+                match parse_i32(parts[1]) {
+                    Some(offset) => {
+                        directives.push(Directive::Timezone(offset));
+                    }
+                    None => {
+                        LOGGER.log(format_args!(
+                            "Config: invalid timezone offset '{}': {}",
+                            parts[1], line
+                        ));
+                    }
+                }
+            }
             _ => {
                 LOGGER.log(format_args!("Config: unknown directive: {}", line));
             }
@@ -168,6 +187,21 @@ fn parse_config(text: &str) -> Vec<Directive> {
     }
 
     directives
+}
+
+/// Parse a signed decimal integer (e.g. "-420", "60")
+fn parse_i32(s: &str) -> Option<i32> {
+    let (negative, digits) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest)
+    } else {
+        (false, s)
+    };
+    let abs = u32::from_str_radix(digits, 10).ok()?;
+    if negative {
+        Some(-(abs as i32))
+    } else {
+        Some(abs as i32)
+    }
 }
 
 /// Parse "XXXX:YYYY" hex vendor:device ID pair

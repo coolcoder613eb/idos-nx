@@ -66,6 +66,11 @@ const MONTH_START_OFFSET: [u32; 12] = [
     0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
 ];
 
+fn is_leap_year(year: u16) -> bool {
+    let y = year as u32;
+    y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+}
+
 pub fn year_offset_from_days(days: u32) -> u32 {
     let hundredths = days * 100;
     hundredths / 36525
@@ -130,7 +135,10 @@ impl DateTime {
             days += 1;
         }
         days += MONTH_START_OFFSET[self.date.month as usize - 1];
-        days += self.date.day as u32;
+        if self.date.month > 2 && is_leap_year(self.date.year) {
+            days += 1; // leap day
+        }
+        days += self.date.day as u32 - 1;
 
         let timestamp = days * SECONDS_IN_DAY
             + self.time.hours as u32 * 60 * 60
