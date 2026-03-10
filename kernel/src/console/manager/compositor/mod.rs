@@ -165,7 +165,7 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         &mut self,
         mouse_x: u16,
         mouse_y: u16,
-        conman: &ConsoleManager,
+        conman: &mut ConsoleManager,
         font: &F,
     ) {
         self.dirty_regions.clear();
@@ -236,15 +236,15 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         self.dirty_regions.push(region);
     }
 
-    fn draw_windows_except<F: Font>(&mut self, conman: &ConsoleManager, font: &F, skip: usize) {
+    fn draw_windows_except<F: Font>(&mut self, conman: &mut ConsoleManager, font: &F, skip: usize) {
         self.draw_windows_inner(conman, font, Some(skip));
     }
 
-    pub fn draw_windows<F: Font>(&mut self, conman: &ConsoleManager, font: &F) {
+    pub fn draw_windows<F: Font>(&mut self, conman: &mut ConsoleManager, font: &F) {
         self.draw_windows_inner(conman, font, None);
     }
 
-    fn draw_windows_inner<F: Font>(&mut self, conman: &ConsoleManager, font: &F, skip_idx: Option<usize>) {
+    fn draw_windows_inner<F: Font>(&mut self, conman: &mut ConsoleManager, font: &F, skip_idx: Option<usize>) {
         let screen_width = self.fb.width;
         let screen_height = self.fb.height;
         let stride = self.fb.stride;
@@ -335,7 +335,7 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
                     + win_x as u32 * bpp as u32,
             };
 
-            let console = conman.consoles.get(window.console_index).unwrap();
+            let console = conman.consoles.get_mut(window.console_index).unwrap();
 
             // Determine if a button on this window is hovered
             let hover_button = match self.topbar_state.hover {
@@ -343,10 +343,16 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
                 _ => None,
             };
 
+            // Determine if a scroll arrow on this window is hovered
+            let hover_scroll = match self.topbar_state.hover {
+                Some(HitTarget::ScrollArrow(idx, dir)) if idx as usize == win_idx => Some(dir),
+                _ => None,
+            };
+
             let focused = win_idx == self.focused_window;
 
-            let (new_width, new_height, dirty_region) =
-                conman.draw_window(console, &mut sub_buffer, font, avail_w, avail_h, self.force_redraw, hover_button, focused, bpp);
+            let (new_width, new_height, dirty_region, scrollbar_info) =
+                ConsoleManager::draw_window(console, &mut sub_buffer, font, avail_w, avail_h, self.force_redraw, hover_button, hover_scroll, focused, bpp);
 
             let window = &mut self.windows[win_idx];
             let screen_dirty = if new_width != window.last_width || new_height != window.last_height
@@ -446,6 +452,58 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
                 let rect = decor::button_screen_rect(win_x, win_y, inner_width, btn);
                 self.hit_map.add(rect, HitTarget::WindowButton(win_idx as u8, btn as u8));
             }
+
+            // Register scrollbar arrow hit zones (highest priority — added last)
+            if let Some(ref sb) = scrollbar_info {
+                use super::hit::ScrollDirection;
+                let arrow = super::scrollbar::ARROW_SIZE as u16;
+                if sb.has_vertical {
+                    // Up arrow
+                    self.hit_map.add(
+                        Region {
+                            x: win_x + sb.v_x,
+                            y: win_y + sb.v_y,
+                            width: arrow,
+                            height: arrow,
+                        },
+                        HitTarget::ScrollArrow(win_idx as u8, ScrollDirection::Up),
+                    );
+                    // Down arrow
+                    let down_y = sb.v_y + sb.v_height - arrow;
+                    self.hit_map.add(
+                        Region {
+                            x: win_x + sb.v_x,
+                            y: win_y + down_y,
+                            width: arrow,
+                            height: arrow,
+                        },
+                        HitTarget::ScrollArrow(win_idx as u8, ScrollDirection::Down),
+                    );
+                }
+                if sb.has_horizontal {
+                    // Left arrow
+                    self.hit_map.add(
+                        Region {
+                            x: win_x + sb.h_x,
+                            y: win_y + sb.h_y,
+                            width: arrow,
+                            height: arrow,
+                        },
+                        HitTarget::ScrollArrow(win_idx as u8, ScrollDirection::Left),
+                    );
+                    // Right arrow
+                    let right_x = sb.h_x + sb.h_width - arrow;
+                    self.hit_map.add(
+                        Region {
+                            x: win_x + right_x,
+                            y: win_y + sb.h_y,
+                            width: arrow,
+                            height: arrow,
+                        },
+                        HitTarget::ScrollArrow(win_idx as u8, ScrollDirection::Right),
+                    );
+                }
+            }
         }
     }
 
@@ -524,6 +582,10 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
         self.windows.get(self.focused_window).map_or(0, |w| w.console_index)
     }
 
+    pub fn window_console(&self, window_idx: usize) -> usize {
+        self.windows.get(window_idx).map_or(0, |w| w.console_index)
+    }
+
     pub fn window_count(&self) -> usize {
         self.windows.len()
     }
@@ -557,7 +619,7 @@ impl<const COLOR_DEPTH: ColorDepth> Compositor<COLOR_DEPTH> {
     /// Begin fast drag rendering. Renders the scene without the dragged
     /// window into the scratch buffer, then snapshots the window's pixels
     /// into a temporary buffer.
-    pub fn begin_drag<F: Font>(&mut self, idx: usize, conman: &ConsoleManager, font: &F) {
+    pub fn begin_drag<F: Font>(&mut self, idx: usize, conman: &mut ConsoleManager, font: &F) {
         if idx >= self.windows.len() {
             return;
         }

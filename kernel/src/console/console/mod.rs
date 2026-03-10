@@ -24,6 +24,17 @@ pub struct Console<const COLS: usize, const ROWS: usize> {
     /// Set when display content has changed and needs re-rendering.
     /// Cleared by the compositor after drawing.
     pub dirty: bool,
+
+    /// Scroll offset in rows. `None` means "follow the bottom" (show the
+    /// most recent rows). `Some(n)` means the topmost visible row is row n.
+    pub scroll_row: Option<usize>,
+    /// Scroll offset in columns. `None` means "follow the right" (show
+    /// rightmost columns). `Some(n)` means the leftmost visible col is col n.
+    pub scroll_col: Option<usize>,
+    /// Maximum scroll offsets from the last render. Updated by draw_window
+    /// so that scroll_console can resolve `None` correctly.
+    pub max_scroll_row: usize,
+    pub max_scroll_col: usize,
 }
 
 impl<const COLS: usize, const ROWS: usize> Console<COLS, ROWS> {
@@ -36,6 +47,10 @@ impl<const COLS: usize, const ROWS: usize> Console<COLS, ROWS> {
             reader_tasks: Vec::new(),
             title: String::from("C:\\COMMAND.ELF"),
             dirty: true,
+            scroll_row: None,
+            scroll_col: None,
+            max_scroll_row: 0,
+            max_scroll_col: 0,
         }
     }
 

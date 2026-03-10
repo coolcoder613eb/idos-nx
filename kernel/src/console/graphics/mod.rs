@@ -25,6 +25,12 @@ pub const BTN_HOVER_BORDER: u32 = 0x8a8a9e;
 pub const BTN_CLOSE_HOVER_BG: u32 = 0x6b2020;
 pub const BTN_CLOSE_HOVER_BORDER: u32 = 0xd06060;
 
+// Scrollbar colors
+pub const SB_BG: u32 = WIN_TITLEBAR;        // gutter/arrow background
+pub const SB_TRACK: u32 = BAR_BG;           // track between arrows
+pub const SB_ARROW_HOVER: u32 = 0x4a4a64;
+pub const SB_ARROW_COLOR: u32 = BAR_TEXT;    // arrow triangle color
+
 #[inline]
 pub fn write_pixel(buffer: &mut [u8], offset: usize, color: u32, bytes_per_pixel: usize) {
     match bytes_per_pixel {

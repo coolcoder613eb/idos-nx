@@ -10,6 +10,15 @@ pub enum HitTarget {
     WindowButton(u8, u8),    // (window_index, button_index: 0=float/tile, 2=close)
     WindowTitleBar(u8),      // (window_index) — drag handle
     WindowContent(u8),       // (window_index) — content area click-to-focus
+    ScrollArrow(u8, ScrollDirection), // (window_index, direction)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDirection {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 pub struct HitZone {

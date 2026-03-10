@@ -255,10 +255,16 @@ pub fn manager_task() -> ! {
         // Mouse hover/click handling
         let current_hover = compositor.hit_map.test(mouse_x as u16, mouse_y as u16);
         if current_hover != prev_hover {
-            // Force window redraw when hovering over/off window buttons
-            let was_win_btn = matches!(prev_hover, Some(manager::hit::HitTarget::WindowButton(..)));
-            let is_win_btn = matches!(current_hover, Some(manager::hit::HitTarget::WindowButton(..)));
-            if was_win_btn || is_win_btn {
+            // Force window redraw when hovering over/off window buttons or scroll arrows
+            let was_interactive = matches!(prev_hover,
+                Some(manager::hit::HitTarget::WindowButton(..)) |
+                Some(manager::hit::HitTarget::ScrollArrow(..))
+            );
+            let is_interactive = matches!(current_hover,
+                Some(manager::hit::HitTarget::WindowButton(..)) |
+                Some(manager::hit::HitTarget::ScrollArrow(..))
+            );
+            if was_interactive || is_interactive {
                 compositor.force_redraw = true;
             }
             compositor.topbar_state.hover = current_hover;
@@ -288,7 +294,8 @@ pub fn manager_task() -> ! {
             let focus_idx = match current_hover {
                 Some(manager::hit::HitTarget::WindowTitleBar(idx))
                 | Some(manager::hit::HitTarget::WindowButton(idx, _))
-                | Some(manager::hit::HitTarget::WindowContent(idx)) => Some(idx),
+                | Some(manager::hit::HitTarget::WindowContent(idx))
+                | Some(manager::hit::HitTarget::ScrollArrow(idx, _)) => Some(idx),
                 _ => None,
             };
             if let Some(idx) = focus_idx {
@@ -326,8 +333,12 @@ pub fn manager_task() -> ! {
                             offset_x: mouse_x as i16 - win_x as i16,
                             offset_y: mouse_y as i16 - win_y as i16,
                         });
-                        compositor.begin_drag(idx as usize, &conman, &console_font);
+                        compositor.begin_drag(idx as usize, &mut conman, &console_font);
                     }
+                }
+                Some(manager::hit::HitTarget::ScrollArrow(idx, dir)) => {
+                    let console_id = compositor.window_console(idx as usize);
+                    conman.scroll_console(console_id, dir);
                 }
                 _ => {}
             }
@@ -384,7 +395,7 @@ pub fn manager_task() -> ! {
             let any_dirty = mouse_moved || any_gfx_dirty || compositor.force_redraw || conman.consoles.iter().any(|c| c.dirty);
 
             if any_dirty {
-                compositor.render(mouse_x as u16, mouse_y as u16, &conman, &console_font);
+                compositor.render(mouse_x as u16, mouse_y as u16, &mut conman, &console_font);
 
                 // Clear dirty flags after rendering
                 for console in conman.consoles.iter_mut() {
