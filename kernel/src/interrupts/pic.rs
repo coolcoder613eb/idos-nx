@@ -86,7 +86,15 @@ pic_irq_core:
     push esi
     push edi
 
+    # Push pointers for _handle_pic_interrupt(&StackFrame, irq, &SavedRegisters)
+    mov ebx, esp
+    push ebx                    # arg3: &SavedRegisters (= ESP after pushing 7 regs)
+    push dword ptr [ebx + 7*4]  # arg2: irq number (by value)
+    lea eax, [ebx + 7*4 + 4]
+    push eax                    # arg1: &StackFrame
+
     call _handle_pic_interrupt
+    add esp, 12
 
     pop edi
     pop esi
@@ -103,7 +111,7 @@ pic_irq_core:
 
 /// Handle interrupts that come from the PIC
 #[no_mangle]
-pub extern "C" fn _handle_pic_interrupt(_registers: SavedState, irq: u32, frame: StackFrame) {
+pub extern "C" fn _handle_pic_interrupt(frame: &StackFrame, irq: u32, _registers: &SavedState) {
     let pic = PIC::new();
 
     if irq == 0 {
@@ -122,11 +130,28 @@ pub extern "C" fn _handle_pic_interrupt(_registers: SavedState, irq: u32, frame:
         }
 
         let should_preempt = scheduler.tick();
+
+        // Virtual interrupt delivery to v86 tasks: if we interrupted a v86
+        // task that has the timer IRQ enabled, mark it pending and inject
+        // the trap flag so the next instruction triggers #DB, exiting to
+        // doslayer for delivery.
+        let is_vm86 = frame.eflags & 0x20000 != 0;
+        if is_vm86 {
+            let task_lock = crate::task::switching::get_current_task();
+            let mut task = task_lock.write();
+            if task.vm86_irq_mask & idos_api::compat::VM86_IRQ_TIMER != 0 {
+                task.vm86_pending_irqs |= idos_api::compat::VM86_IRQ_TIMER;
+                // Set TF (bit 8) in the real eflags on the interrupt frame.
+                // frame is now a reference to the actual stack, so this works.
+                frame.set_eflags(frame.eflags | 0x100);
+            }
+        }
+
         pic.end_of_interrupt(0);
 
         // Preempt if the time slice expired and we interrupted userspace
         // (ring 3 or VM86 mode).
-        if should_preempt && (frame.cs & 3 != 0 || frame.eflags & 0x20000 != 0) {
+        if should_preempt && (frame.cs & 3 != 0 || is_vm86) {
             crate::task::actions::yield_coop();
         }
 

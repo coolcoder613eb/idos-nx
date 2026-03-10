@@ -4,7 +4,11 @@ use crate::{interrupts::syscall::FullSavedRegisters, task::switching::get_curren
 
 use core::arch::asm;
 
-pub fn enter_vm86_mode(registers: &FullSavedRegisters, vm_regs_ptr: *mut VMRegisters, irq_mask: u32) {
+pub fn enter_vm86_mode(
+    registers: &FullSavedRegisters,
+    vm_regs_ptr: *mut VMRegisters,
+    irq_mask: u32,
+) {
     let task_lock = get_current_task();
 
     {
@@ -18,7 +22,12 @@ pub fn enter_vm86_mode(registers: &FullSavedRegisters, vm_regs_ptr: *mut VMRegis
 
     let vm_regs_copy = vm_regs.clone();
 
-    crate::kprintln!("Enter 8086 Mode @ {:X}:{:X}", vm_regs.cs, vm_regs.eip);
+    crate::kprintln!(
+        "Enter 8086 Mode @ {:X}:{:X} IRQ({:X})",
+        vm_regs.cs,
+        vm_regs.eip,
+        irq_mask
+    );
 
     unsafe {
         asm!(
@@ -59,7 +68,10 @@ pub fn enter_protected_mode(registers: &FullSavedRegisters, vm_regs_ptr: *mut VM
 
     crate::kprintln!(
         "Enter Protected Mode @ {:X}:{:X} (SS {:X}:{:X})",
-        vm_regs.cs, vm_regs.eip, vm_regs.ss, vm_regs.esp
+        vm_regs.cs,
+        vm_regs.eip,
+        vm_regs.ss,
+        vm_regs.esp
     );
 
     // We use the same trick as enter_vm86: point ESP at the VMRegisters struct

@@ -424,8 +424,16 @@ pub extern "C" fn _debug_exception_inner(
     registers: &mut SavedRegisters,
 ) -> ! {
     if stack_frame.eflags & 0x20000 != 0 {
-        // VM86 mode — exit back to doslayer
-        exit_vm86(stack_frame, registers, idos_api::compat::VM86_EXIT_DEBUG);
+        // VM86 mode — exit back to doslayer with pending IRQs in upper bits
+        let pending = {
+            let task_lock = crate::task::switching::get_current_task();
+            let mut task = task_lock.write();
+            let p = task.vm86_pending_irqs;
+            task.vm86_pending_irqs = 0;
+            p
+        };
+        let exit_reason = idos_api::compat::VM86_EXIT_DEBUG | (pending << 8);
+        exit_vm86(stack_frame, registers, exit_reason);
     }
 
     let eip = stack_frame.eip;

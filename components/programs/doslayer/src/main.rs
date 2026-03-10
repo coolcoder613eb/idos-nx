@@ -45,19 +45,19 @@ struct LoadInfoHeader {
 #[repr(C, packed)]
 #[derive(Default)]
 struct MzHeader {
-    magic: [u8; 2],           // 'M','Z' or 'Z','M'
-    last_page_bytes: u16,     // bytes used in last 512-byte page
-    total_pages: u16,         // total number of 512-byte pages
-    relocation_count: u16,    // number of relocation entries
-    header_paragraphs: u16,   // header size in 16-byte paragraphs
+    magic: [u8; 2],         // 'M','Z' or 'Z','M'
+    last_page_bytes: u16,   // bytes used in last 512-byte page
+    total_pages: u16,       // total number of 512-byte pages
+    relocation_count: u16,  // number of relocation entries
+    header_paragraphs: u16, // header size in 16-byte paragraphs
     min_extra_paragraphs: u16,
     max_extra_paragraphs: u16,
-    initial_ss: u16,          // initial SS relative to load segment
-    initial_sp: u16,          // initial SP
+    initial_ss: u16, // initial SS relative to load segment
+    initial_sp: u16, // initial SP
     checksum: u16,
-    initial_ip: u16,          // initial IP
-    initial_cs: u16,          // initial CS relative to load segment
-    relocation_offset: u16,   // offset of relocation table in file
+    initial_ip: u16,        // initial IP
+    initial_cs: u16,        // initial CS relative to load segment
+    relocation_offset: u16, // offset of relocation table in file
     overlay_number: u16,
 }
 
@@ -406,7 +406,7 @@ fn sync_graphics_buffer() {
 
         // Write dirty rect header: full screen
         let header = vaddr as *mut u16;
-        core::ptr::write_volatile(header, 0);       // x
+        core::ptr::write_volatile(header, 0); // x
         core::ptr::write_volatile(header.add(1), 0); // y
         core::ptr::write_volatile(header.add(2), 0xFFFF); // w (full)
         core::ptr::write_volatile(header.add(3), 0xFFFF); // h (full)
@@ -417,12 +417,7 @@ fn sync_graphics_buffer() {
 fn load_idos_palette() {
     use idos_api::io::termios::TGETPAL;
     unsafe {
-        let _ = ioctl_sync(
-            STDIN,
-            TGETPAL,
-            VGA_PALETTE.as_mut_ptr() as u32,
-            768,
-        );
+        let _ = ioctl_sync(STDIN, TGETPAL, VGA_PALETTE.as_mut_ptr() as u32, 768);
     }
 }
 
@@ -430,12 +425,7 @@ fn load_idos_palette() {
 fn push_idos_palette() {
     use idos_api::io::termios::TSETPAL;
     unsafe {
-        let _ = ioctl_sync(
-            STDIN,
-            TSETPAL,
-            VGA_PALETTE.as_ptr() as u32,
-            768,
-        );
+        let _ = ioctl_sync(STDIN, TSETPAL, VGA_PALETTE.as_ptr() as u32, 768);
     }
 }
 
@@ -558,9 +548,9 @@ fn setup_dos_memory() {
     // Place the DPMI entry stub: INT 0xFE (CD FE) + RETF (CB)
     unsafe {
         let stub = DPMI_ENTRY_STUB as *mut u8;
-        core::ptr::write_volatile(stub, 0xCD);             // INT
+        core::ptr::write_volatile(stub, 0xCD); // INT
         core::ptr::write_volatile(stub.add(1), DPMI_ENTRY_INT); // 0xFE
-        core::ptr::write_volatile(stub.add(2), 0xCB);      // RETF
+        core::ptr::write_volatile(stub.add(2), 0xCB); // RETF
     }
 
     // Point all 256 IVT entries to the IRET stub
@@ -793,7 +783,10 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
         DPMI_PM_STACK_BASE = 0;
         for i in 0..LDT_MAX_SLOTS {
             DPMI_LDT_SHADOW[i] = LdtDescriptorParams {
-                base: 0, limit: 0, access: 0, flags: 0,
+                base: 0,
+                limit: 0,
+                access: 0,
+                flags: 0,
             };
         }
         for i in 0..DOS_ARENA_MAX_BLOCKS {
@@ -803,6 +796,7 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
         for i in 0..DPMI_HIGH_MEM_MAX {
             DPMI_HIGH_MEM[i] = (0, 0);
         }
+        TIMER_ACCUM = 0;
     }
 
     let mut termios = Termios::default();
@@ -840,7 +834,11 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
 
     loop {
         let irq_mask = unsafe {
-            if VM86_IF { VM86_IRQ_MASK } else { 0 }
+            if VM86_IF {
+                VM86_IRQ_MASK
+            } else {
+                0
+            }
         };
         let exit_reason = idos_api::syscall::exec::enter_8086(&mut vm_regs, irq_mask);
 
@@ -850,11 +848,16 @@ fn compat_start(mut vm_regs: VMRegisters) -> ! {
                     break;
                 }
             },
-            idos_api::compat::VM86_EXIT_DEBUG => {
+            _ if (exit_reason & 0xFF) == idos_api::compat::VM86_EXIT_DEBUG => {
                 // Hardware interrupt delivery — TF was set by the kernel
                 // Clear TF from the saved eflags so we don't keep trapping
                 vm_regs.eflags &= !0x100;
-                // TODO: deliver pending virtual interrupts
+                // Deliver pending virtual interrupts
+                let pending = exit_reason >> 8;
+                if pending != 0 {
+                    dos_log(b"DEBUG exit, delivering IRQs\n");
+                }
+                deliver_pending_irqs(pending, &mut vm_regs);
             }
             _ => break,
         }
@@ -1053,7 +1056,9 @@ fn peek_next_key() -> Option<(u8, u8)> {
         }
     }
     if let Some(key) = read_next_key() {
-        unsafe { KEY_LOOKAHEAD = Some(key); }
+        unsafe {
+            KEY_LOOKAHEAD = Some(key);
+        }
         Some(key)
     } else {
         None
@@ -1115,27 +1120,57 @@ fn keycode_to_bios(keycode: u8) -> Option<(u8, u8)> {
         0x20 => (0x39, 0x20),   // Space
 
         // Numbers 0-9
-        0x30 => (0x0B, b'0'), 0x31 => (0x02, b'1'), 0x32 => (0x03, b'2'),
-        0x33 => (0x04, b'3'), 0x34 => (0x05, b'4'), 0x35 => (0x06, b'5'),
-        0x36 => (0x07, b'6'), 0x37 => (0x08, b'7'), 0x38 => (0x09, b'8'),
+        0x30 => (0x0B, b'0'),
+        0x31 => (0x02, b'1'),
+        0x32 => (0x03, b'2'),
+        0x33 => (0x04, b'3'),
+        0x34 => (0x05, b'4'),
+        0x35 => (0x06, b'5'),
+        0x36 => (0x07, b'6'),
+        0x37 => (0x08, b'7'),
+        0x38 => (0x09, b'8'),
         0x39 => (0x0A, b'9'),
 
         // Letters A-Z (lowercase ASCII)
-        0x41 => (0x1E, b'a'), 0x42 => (0x30, b'b'), 0x43 => (0x2E, b'c'),
-        0x44 => (0x20, b'd'), 0x45 => (0x12, b'e'), 0x46 => (0x21, b'f'),
-        0x47 => (0x22, b'g'), 0x48 => (0x23, b'h'), 0x49 => (0x17, b'i'),
-        0x4A => (0x24, b'j'), 0x4B => (0x25, b'k'), 0x4C => (0x26, b'l'),
-        0x4D => (0x32, b'm'), 0x4E => (0x31, b'n'), 0x4F => (0x18, b'o'),
-        0x50 => (0x19, b'p'), 0x51 => (0x10, b'q'), 0x52 => (0x13, b'r'),
-        0x53 => (0x1F, b's'), 0x54 => (0x14, b't'), 0x55 => (0x16, b'u'),
-        0x56 => (0x2F, b'v'), 0x57 => (0x11, b'w'), 0x58 => (0x2D, b'x'),
-        0x59 => (0x15, b'y'), 0x5A => (0x2C, b'z'),
+        0x41 => (0x1E, b'a'),
+        0x42 => (0x30, b'b'),
+        0x43 => (0x2E, b'c'),
+        0x44 => (0x20, b'd'),
+        0x45 => (0x12, b'e'),
+        0x46 => (0x21, b'f'),
+        0x47 => (0x22, b'g'),
+        0x48 => (0x23, b'h'),
+        0x49 => (0x17, b'i'),
+        0x4A => (0x24, b'j'),
+        0x4B => (0x25, b'k'),
+        0x4C => (0x26, b'l'),
+        0x4D => (0x32, b'm'),
+        0x4E => (0x31, b'n'),
+        0x4F => (0x18, b'o'),
+        0x50 => (0x19, b'p'),
+        0x51 => (0x10, b'q'),
+        0x52 => (0x13, b'r'),
+        0x53 => (0x1F, b's'),
+        0x54 => (0x14, b't'),
+        0x55 => (0x16, b'u'),
+        0x56 => (0x2F, b'v'),
+        0x57 => (0x11, b'w'),
+        0x58 => (0x2D, b'x'),
+        0x59 => (0x15, b'y'),
+        0x5A => (0x2C, b'z'),
 
         // Punctuation
-        0x2C => (0x33, b','), 0x2D => (0x0C, b'-'), 0x2E => (0x34, b'.'),
-        0x2F => (0x35, b'/'), 0x3A => (0x27, b';'), 0x3B => (0x28, b'\''),
-        0x3D => (0x0D, b'='), 0x5B => (0x1A, b'['), 0x5C => (0x2B, b'\\'),
-        0x5D => (0x1B, b']'), 0x5F => (0x29, b'`'),
+        0x2C => (0x33, b','),
+        0x2D => (0x0C, b'-'),
+        0x2E => (0x34, b'.'),
+        0x2F => (0x35, b'/'),
+        0x3A => (0x27, b';'),
+        0x3B => (0x28, b'\''),
+        0x3D => (0x0D, b'='),
+        0x5B => (0x1A, b'['),
+        0x5C => (0x2B, b'\\'),
+        0x5D => (0x1B, b']'),
+        0x5F => (0x29, b'`'),
 
         // Arrow keys (extended, no ASCII)
         0x21 => (0x4B, 0x00), // Left
@@ -1149,6 +1184,73 @@ fn keycode_to_bios(keycode: u8) -> Option<(u8, u8)> {
         _ => return None,
     };
     Some((scancode, ascii))
+}
+
+/// Timer tick divider state. The kernel PIT runs at 100 Hz, but DOS programs
+/// expect ~18.2 Hz. We accumulate fractional ticks: every time the accumulator
+/// reaches the threshold, we deliver one DOS tick.
+/// Using fixed-point: 100 Hz / 18.2 Hz ≈ 5.4945. We accumulate 182 per tick
+/// and fire when it reaches 1000 (1000/182 ≈ 5.4945).
+static mut TIMER_ACCUM: u32 = 0;
+const TIMER_ACCUM_PER_TICK: u32 = 182;
+const TIMER_ACCUM_THRESHOLD: u32 = 1000;
+
+/// Deliver pending hardware interrupts to the v86 program.
+/// For each pending IRQ, simulate a hardware interrupt: push FLAGS, CS, IP
+/// onto the v86 stack and set CS:IP to the IVT vector.
+fn deliver_pending_irqs(pending: u32, vm_regs: &mut VMRegisters) {
+    // Map IRQ bits to interrupt vectors
+    // Bit 0 = IRQ 0 (timer) → INT 1Ch (user timer tick)
+    // Bit 1 = IRQ 1 (keyboard) → INT 9
+    let irq_to_int: [(u32, u8); 2] = [
+        (idos_api::compat::VM86_IRQ_TIMER, 0x1C),
+        (idos_api::compat::VM86_IRQ_KEYBOARD, 0x09),
+    ];
+
+    for &(mask, int_num) in &irq_to_int {
+        if pending & mask == 0 {
+            continue;
+        }
+        // Rate-limit timer delivery to ~18.2 Hz
+        if mask == idos_api::compat::VM86_IRQ_TIMER {
+            unsafe {
+                TIMER_ACCUM += TIMER_ACCUM_PER_TICK;
+                if TIMER_ACCUM < TIMER_ACCUM_THRESHOLD {
+                    continue;
+                }
+                TIMER_ACCUM -= TIMER_ACCUM_THRESHOLD;
+            }
+        }
+        // Read the IVT entry for this interrupt
+        let ivt_addr = (int_num as u32 * 4) as *const u16;
+        let (vec_offset, vec_segment) = unsafe {
+            (
+                core::ptr::read_volatile(ivt_addr) as u32,
+                core::ptr::read_volatile(ivt_addr.add(1)) as u32,
+            )
+        };
+        // Skip if the vector points to our default IRET stub (no handler installed)
+        if vec_segment == IRET_STUB_SEGMENT as u32 && vec_offset == IRET_STUB_OFFSET as u32 {
+            continue;
+        }
+        // Simulate hardware interrupt: push FLAGS, CS, IP onto the v86 stack
+        unsafe {
+            vm_regs.esp = (vm_regs.esp & 0xffff).wrapping_sub(2);
+            let sp = (vm_regs.ss << 4) + (vm_regs.esp & 0xffff);
+            core::ptr::write_volatile(sp as *mut u16, vm_regs.eflags as u16);
+
+            vm_regs.esp = (vm_regs.esp & 0xffff).wrapping_sub(2);
+            let sp = (vm_regs.ss << 4) + (vm_regs.esp & 0xffff);
+            core::ptr::write_volatile(sp as *mut u16, vm_regs.cs as u16);
+
+            vm_regs.esp = (vm_regs.esp & 0xffff).wrapping_sub(2);
+            let sp = (vm_regs.ss << 4) + (vm_regs.esp & 0xffff);
+            core::ptr::write_volatile(sp as *mut u16, vm_regs.eip as u16);
+        }
+        // Set CS:IP to the handler
+        vm_regs.cs = vec_segment;
+        vm_regs.eip = vec_offset;
+    }
 }
 
 fn handle_interrupt(irq: u8, vm_regs: &mut VMRegisters) {
@@ -1247,8 +1349,10 @@ fn dpmi_enter(vm_regs: &mut VMRegisters) {
     let ss_sel = idos_api::syscall::ldt::ldt_allocate();
     let es_sel = idos_api::syscall::ldt::ldt_allocate();
 
-    if cs_sel == 0xffff_ffff || ds_sel == 0xffff_ffff
-        || ss_sel == 0xffff_ffff || es_sel == 0xffff_ffff
+    if cs_sel == 0xffff_ffff
+        || ds_sel == 0xffff_ffff
+        || ss_sel == 0xffff_ffff
+        || es_sel == 0xffff_ffff
     {
         dos_log(b"DPMI: failed to allocate LDT selectors\n");
         vm_regs.eflags |= 1;
@@ -1321,8 +1425,7 @@ fn dpmi_enter(vm_regs: &mut VMRegisters) {
     dpmi_ldt_write(es_sel, &es_params);
 
     // Allocate a PM stack
-    let pm_stack_base = map_memory(None, DPMI_PM_STACK_SIZE, None)
-        .unwrap_or(0);
+    let pm_stack_base = map_memory(None, DPMI_PM_STACK_SIZE, None).unwrap_or(0);
     if pm_stack_base == 0 {
         dos_log(b"DPMI: failed to allocate PM stack\n");
         vm_regs.eflags |= 1;
@@ -1348,9 +1451,9 @@ fn dpmi_enter(vm_regs: &mut VMRegisters) {
         esi: vm_regs.esi,
         edi: vm_regs.edi,
         ebp: vm_regs.ebp,
-        eip: ret_ip,  // offset within the CS segment
+        eip: ret_ip, // offset within the CS segment
         cs: cs_sel,
-        eflags: 0x200, // IF set
+        eflags: 0x200,                           // IF set
         esp: pm_stack_base + DPMI_PM_STACK_SIZE, // top of stack
         ss: ss_sel,
         es: es_sel,
@@ -1425,7 +1528,9 @@ fn dpmi_handle_int(int_num: u8, regs: &mut VMRegisters) -> bool {
 fn dpmi_ldt_write(selector: u32, params: &LdtDescriptorParams) {
     let index = (selector >> 3) as usize;
     if index > 0 && index < LDT_MAX_SLOTS {
-        unsafe { DPMI_LDT_SHADOW[index] = *params; }
+        unsafe {
+            DPMI_LDT_SHADOW[index] = *params;
+        }
     }
     idos_api::syscall::ldt::ldt_modify(selector, params);
 }
@@ -1436,7 +1541,12 @@ fn dpmi_ldt_read(selector: u32) -> LdtDescriptorParams {
     if index > 0 && index < LDT_MAX_SLOTS {
         unsafe { DPMI_LDT_SHADOW[index] }
     } else {
-        LdtDescriptorParams { base: 0, limit: 0, access: 0, flags: 0 }
+        LdtDescriptorParams {
+            base: 0,
+            limit: 0,
+            access: 0,
+            flags: 0,
+        }
     }
 }
 
@@ -1446,7 +1556,10 @@ fn dpmi_ldt_clear(selector: u32) {
     if index > 0 && index < LDT_MAX_SLOTS {
         unsafe {
             DPMI_LDT_SHADOW[index] = LdtDescriptorParams {
-                base: 0, limit: 0, access: 0, flags: 0,
+                base: 0,
+                limit: 0,
+                access: 0,
+                flags: 0,
             };
         }
     }
@@ -1458,7 +1571,6 @@ fn dpmi_int31(regs: &mut VMRegisters) {
 
     match ax {
         // ---- Descriptor management (AH=00) ----
-
         0x0000 => {
             // Allocate LDT descriptor(s)
             // CX = number of descriptors to allocate
@@ -1577,7 +1689,6 @@ fn dpmi_int31(regs: &mut VMRegisters) {
         }
 
         // ---- DOS memory management (AH=01) ----
-
         0x0100 => {
             // Allocate DOS memory block
             // BX = paragraphs requested
@@ -1642,7 +1753,6 @@ fn dpmi_int31(regs: &mut VMRegisters) {
         }
 
         // ---- Memory management (AH=05) ----
-
         0x0501 => {
             // Allocate memory block (above 1 MB)
             // BX:CX = size in bytes
@@ -1687,7 +1797,6 @@ fn dpmi_int31(regs: &mut VMRegisters) {
         }
 
         // ---- Interrupt management (AH=02) ----
-
         0x0200 => {
             // Get real-mode interrupt vector
             // BL = interrupt number
@@ -1722,13 +1831,14 @@ fn dpmi_int31(regs: &mut VMRegisters) {
                 _ => None,
             };
             if let Some(irq_num) = irq {
-                unsafe { VM86_IRQ_MASK |= 1 << irq_num; }
+                unsafe {
+                    VM86_IRQ_MASK |= 1 << irq_num;
+                }
             }
             regs.eflags &= !1;
         }
 
         // ---- Real-mode interrupt simulation (AH=03) ----
-
         0x0300 => {
             // Simulate real-mode interrupt
             // BL = interrupt number, ES:EDI = pointer to RealModeCallStruct
@@ -1740,30 +1850,50 @@ fn dpmi_int31(regs: &mut VMRegisters) {
             let mut vm = unsafe {
                 let s = &*rmcs;
                 VMRegisters {
-                    eax: s.eax, ebx: s.ebx, ecx: s.ecx, edx: s.edx,
-                    esi: s.esi, edi: s.edi, ebp: s.ebp,
-                    eip: s.ip as u32, cs: s.cs as u32,
+                    eax: s.eax,
+                    ebx: s.ebx,
+                    ecx: s.ecx,
+                    edx: s.edx,
+                    esi: s.esi,
+                    edi: s.edi,
+                    ebp: s.ebp,
+                    eip: s.ip as u32,
+                    cs: s.cs as u32,
                     eflags: s.flags as u32,
-                    esp: s.sp as u32, ss: s.ss as u32,
-                    es: s.es as u32, ds: s.ds as u32,
-                    fs: s.fs as u32, gs: s.gs as u32,
+                    esp: s.sp as u32,
+                    ss: s.ss as u32,
+                    es: s.es as u32,
+                    ds: s.ds as u32,
+                    fs: s.fs as u32,
+                    gs: s.gs as u32,
                 }
             };
 
             // Temporarily clear DPMI_ACTIVE so handlers use real-mode
             // pointer resolution (seg << 4 + offset)
-            unsafe { DPMI_ACTIVE = false; }
+            unsafe {
+                DPMI_ACTIVE = false;
+            }
             handle_interrupt(int_num, &mut vm);
-            unsafe { DPMI_ACTIVE = true; }
+            unsafe {
+                DPMI_ACTIVE = true;
+            }
 
             // Copy results back to the RMCS
             unsafe {
                 let s = &mut *rmcs;
-                s.eax = vm.eax; s.ebx = vm.ebx; s.ecx = vm.ecx; s.edx = vm.edx;
-                s.esi = vm.esi; s.edi = vm.edi; s.ebp = vm.ebp;
+                s.eax = vm.eax;
+                s.ebx = vm.ebx;
+                s.ecx = vm.ecx;
+                s.edx = vm.edx;
+                s.esi = vm.esi;
+                s.edi = vm.edi;
+                s.ebp = vm.ebp;
                 s.flags = vm.eflags as u16;
-                s.es = vm.es as u16; s.ds = vm.ds as u16;
-                s.fs = vm.fs as u16; s.gs = vm.gs as u16;
+                s.es = vm.es as u16;
+                s.ds = vm.ds as u16;
+                s.fs = vm.fs as u16;
+                s.gs = vm.gs as u16;
             }
 
             regs.eflags &= !1;
@@ -1989,11 +2119,16 @@ fn dpmi_log_unsupported(ax: u16) {
         buf[i] = b;
         i += 1;
     }
-    buf[i] = hex[(hi >> 4) as usize]; i += 1;
-    buf[i] = hex[(hi & 0xf) as usize]; i += 1;
-    buf[i] = hex[(lo >> 4) as usize]; i += 1;
-    buf[i] = hex[(lo & 0xf) as usize]; i += 1;
-    buf[i] = b'\n'; i += 1;
+    buf[i] = hex[(hi >> 4) as usize];
+    i += 1;
+    buf[i] = hex[(hi & 0xf) as usize];
+    i += 1;
+    buf[i] = hex[(lo >> 4) as usize];
+    i += 1;
+    buf[i] = hex[(lo & 0xf) as usize];
+    i += 1;
+    buf[i] = b'\n';
+    i += 1;
     dos_log(&buf[..i]);
 }
 
@@ -2004,7 +2139,9 @@ fn bios_video(regs: &mut VMRegisters) {
         0x00 => {
             // AH=00: Set video mode
             let mode = regs.al() & 0x7F; // bit 7 = don't clear screen
-            unsafe { VGA_MODE = mode; }
+            unsafe {
+                VGA_MODE = mode;
+            }
             match mode {
                 0x03 => {
                     // 80x25 text mode — exit graphics if active
@@ -2143,7 +2280,9 @@ fn bios_palette(regs: &mut VMRegisters) {
             let table = table_addr as *const u8;
             for i in 0..count {
                 let idx = first + i;
-                if idx >= 256 { break; }
+                if idx >= 256 {
+                    break;
+                }
                 unsafe {
                     let r = core::ptr::read_volatile(table.add(i * 3)) as u16;
                     let g = core::ptr::read_volatile(table.add(i * 3 + 1)) as u16;
@@ -2179,7 +2318,9 @@ fn bios_palette(regs: &mut VMRegisters) {
             let table = table_addr as *mut u8;
             for i in 0..count {
                 let idx = first + i;
-                if idx >= 256 { break; }
+                if idx >= 256 {
+                    break;
+                }
                 unsafe {
                     let r = (VGA_PALETTE[idx * 3] as u16 * 63 / 255) as u8;
                     let g = (VGA_PALETTE[idx * 3 + 1] as u16 * 63 / 255) as u8;
@@ -2429,7 +2570,11 @@ fn set_current_drive(regs: &mut VMRegisters) {
 /// Output: AL=current drive (0=A, 1=B, ...)
 fn get_current_drive(regs: &mut VMRegisters) {
     let drive_letter = unsafe {
-        if DOS_CWD_LEN > 0 { DOS_CWD[0] } else { b'A' }
+        if DOS_CWD_LEN > 0 {
+            DOS_CWD[0]
+        } else {
+            b'A'
+        }
     };
     let drive_num = if drive_letter >= b'A' && drive_letter <= b'Z' {
         drive_letter - b'A'
@@ -2442,9 +2587,9 @@ fn get_current_drive(regs: &mut VMRegisters) {
 /// AH=0x30 - Get DOS version
 /// Returns AL=major, AH=minor, BH=OEM ID, BL:CX=serial
 fn get_dos_version(regs: &mut VMRegisters) {
-    regs.set_al(5);   // DOS 5.0
+    regs.set_al(5); // DOS 5.0
     regs.set_ah(0);
-    regs.ebx = 0;     // OEM=IBM, serial=0
+    regs.ebx = 0; // OEM=IBM, serial=0
     regs.ecx = 0;
 }
 
@@ -2467,10 +2612,10 @@ fn get_interrupt_vector(regs: &mut VMRegisters) {
 /// Output: AX=sectors/cluster, BX=free clusters, CX=bytes/sector, DX=total clusters
 fn get_disk_free_space(regs: &mut VMRegisters) {
     // Return plausible values for a FAT12 floppy
-    regs.set_ax(1);     // 1 sector per cluster
+    regs.set_ax(1); // 1 sector per cluster
     regs.ebx = (regs.ebx & 0xffff0000) | 100; // 100 free clusters
-    regs.set_cx(512);   // 512 bytes per sector
-    regs.set_dx(2880);  // 2880 total clusters (1.44MB floppy)
+    regs.set_cx(512); // 512 bytes per sector
+    regs.set_dx(2880); // 2880 total clusters (1.44MB floppy)
 }
 
 /// AH=0x47 - Get current directory
@@ -2584,7 +2729,9 @@ fn close_file(regs: &mut VMRegisters) {
             if !fd.is_device() {
                 let _ = close_sync(fd.handle);
             }
-            unsafe { DOS_FDS[dos_handle as usize].flags = 0; }
+            unsafe {
+                DOS_FDS[dos_handle as usize].flags = 0;
+            }
             regs.eflags &= !1;
         }
         None => {
@@ -2599,7 +2746,11 @@ fn close_file(regs: &mut VMRegisters) {
 /// Output: CF=0 AX=bytes read on success
 fn read_file(regs: &mut VMRegisters) {
     let dos_handle = (regs.ebx & 0xffff) as u16;
-    let count = if unsafe { DPMI_ACTIVE } { regs.ecx as usize } else { (regs.ecx & 0xffff) as usize };
+    let count = if unsafe { DPMI_ACTIVE } {
+        regs.ecx as usize
+    } else {
+        (regs.ecx & 0xffff) as usize
+    };
     let buffer_addr = resolve_ptr(regs.ds, regs.edx);
     let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_addr as *mut u8, count) };
 
@@ -2642,7 +2793,11 @@ fn read_file(regs: &mut VMRegisters) {
 /// Output: CF=0 AX=bytes written on success
 fn write_file(regs: &mut VMRegisters) {
     let dos_handle = (regs.ebx & 0xffff) as u16;
-    let count = if unsafe { DPMI_ACTIVE } { regs.ecx as usize } else { (regs.ecx & 0xffff) as usize };
+    let count = if unsafe { DPMI_ACTIVE } {
+        regs.ecx as usize
+    } else {
+        (regs.ecx & 0xffff) as usize
+    };
     let buffer_addr = resolve_ptr(regs.ds, regs.edx);
     let buffer = unsafe { core::slice::from_raw_parts(buffer_addr as *const u8, count) };
 
@@ -2688,7 +2843,7 @@ fn seek_file(regs: &mut VMRegisters) {
             }
 
             let new_pos: i64 = match origin {
-                0 => offset as i64,                   // SEEK_SET
+                0 => offset as i64,                    // SEEK_SET
                 1 => fd.cursor as i64 + offset as i64, // SEEK_CUR
                 2 => {
                     // SEEK_END: need file size
@@ -2737,7 +2892,7 @@ fn ioctl(regs: &mut VMRegisters) {
             let dos_handle = (regs.ebx & 0xffff) as u16;
             let info: u16 = match get_dos_fd(dos_handle) {
                 Some(fd) if fd.is_device() => 0x80D3, // device flags
-                Some(_) => 0x0000,                     // disk file
+                Some(_) => 0x0000,                    // disk file
                 None => {
                     regs.eflags |= 1;
                     regs.set_ax(0x06);

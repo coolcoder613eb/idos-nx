@@ -105,6 +105,8 @@ pub struct Task {
     pub vm86_registers: Option<FullSavedRegisters>,
     /// IRQ bitmask for virtual interrupt delivery in VM86 mode
     pub vm86_irq_mask: u32,
+    /// Bitmask of IRQs pending delivery to the v86 task
+    pub vm86_pending_irqs: u32,
 
     /// Storage for the task's registers when it enters DPMI protected mode.
     /// When Some, GPF handler knows to exit back to the caller instead of terminating.
@@ -140,6 +142,7 @@ impl Task {
             last_map_result: None,
             vm86_registers: None,
             vm86_irq_mask: 0,
+            vm86_pending_irqs: 0,
             dpmi_registers: None,
             fpu_state: FxState::new(),
             ldt: None,
