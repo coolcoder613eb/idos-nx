@@ -188,12 +188,12 @@ impl core::fmt::Write for BufferedSerialPort {
 // Global storage: up to 2 COM ports, indexed 0 (COM1) and 1 (COM2)
 // ---------------------------------------------------------------------------
 
-static mut COM_PORTS: [Option<BufferedSerialPort>; 2] = [None, None];
+static mut COM_PORTS: [Option<BufferedSerialPort>; 4] = [None, None, None, None];
 
 /// Initialize a COM port and register it in the global table.
 /// Must be called before any `with_port` access for this index.
 pub fn init_port(index: usize, base_port: u16) {
-    assert!(index < 2);
+    assert!(index < 4);
     let port = SerialPort::new(base_port);
     port.init();
     unsafe {
@@ -208,4 +208,9 @@ where
     F: FnOnce(&mut BufferedSerialPort) -> R,
 {
     unsafe { COM_PORTS[index].as_mut().map(f) }
+}
+
+/// Returns true if the given port index has been initialized.
+pub fn port_exists(index: usize) -> bool {
+    unsafe { COM_PORTS.get(index).is_some_and(|p| p.is_some()) }
 }

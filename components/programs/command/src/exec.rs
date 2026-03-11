@@ -882,7 +882,7 @@ fn type_file_inner(env: &mut Environment, arg: &String) -> Result<(), ()> {
         read_offset += len as u32;
         env.write(&buffer[..len]);
 
-        if len < buffer.len() {
+        if len == 0 {
             break;
         }
     }

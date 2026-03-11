@@ -47,8 +47,14 @@ pub extern "C" fn _start() -> ! {
         init::init_memory();
     }
 
-    // Initialize the serial port early so kprint! works on all systems
-    hardware::com::serial::init_port(0, 0x3f8);
+    // Read COM port base addresses from the BIOS Data Area (0x400-0x407).
+    // The identity mapping from init_memory still covers this region.
+    for i in 0..4u16 {
+        let base_port = unsafe { core::ptr::read_volatile((0x400 + i * 2) as *const u16) };
+        if base_port != 0 {
+            hardware::com::serial::init_port(i as usize, base_port);
+        }
+    }
 
     kprint!("\nKernel Memory initialized.\n");
 
