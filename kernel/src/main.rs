@@ -47,6 +47,9 @@ pub extern "C" fn _start() -> ! {
         init::init_memory();
     }
 
+    // Initialize the serial port early so kprint! works on all systems
+    hardware::com::serial::init_port(0, 0x3f8);
+
     kprint!("\nKernel Memory initialized.\n");
 
     let initial_pagedir = memory::virt::page_table::get_current_pagedir();
@@ -115,7 +118,11 @@ fn init_system() -> ! {
     io::filesystem::fatfs::mount_fat_fs_single("C", "ATA1");
 
     // Read config file now that filesystems are available
-    let config_path = if floppy_boot { "A:\\DRIVERS.CFG" } else { "C:\\DRIVERS.CFG" };
+    let config_path = if floppy_boot {
+        "A:\\DRIVERS.CFG"
+    } else {
+        "C:\\DRIVERS.CFG"
+    };
     logger.log("Reading DRIVERS.CFG...\n");
     let directives = config::read_config(config_path);
 

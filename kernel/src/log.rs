@@ -5,8 +5,15 @@ use core::fmt::{self, Write};
 use crate::io::handle::Handle;
 
 pub fn _kprint(args: fmt::Arguments) {
-    let mut serial = crate::hardware::com::serial::SerialPort::new(0x3f8);
-    serial.write_fmt(args).unwrap();
+    use crate::hardware::com::serial::with_port;
+    match with_port(0, |port| port.write_fmt(args)) {
+        Some(Ok(())) => {}
+        _ => {
+            // Fallback for early boot before init_port has been called
+            let mut serial = crate::hardware::com::serial::SerialPort::new(0x3f8);
+            serial.write_fmt(args).unwrap();
+        }
+    }
 }
 
 #[macro_export]

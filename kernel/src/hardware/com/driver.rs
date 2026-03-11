@@ -20,7 +20,7 @@ use crate::task::actions::{
     sync::{block_on_wake_set, create_wake_set},
 };
 
-use super::serial::SerialPort;
+use super::serial::with_port;
 
 /// Main event loop of the COM driver
 pub fn run_driver() -> ! {
@@ -32,7 +32,7 @@ pub fn run_driver() -> ! {
 
     let wake_set = create_wake_set();
 
-    let mut driver_impl = ComDeviceDriver::new(0x3f8);
+    let mut driver_impl = ComDeviceDriver::new(0);
 
     let mut interrupt_read = AsyncOp::new(ASYNC_OP_READ, interrupt_ready.as_mut_ptr() as u32, 1, 0);
     let _ = send_io_op(irq_handle, &interrupt_read, Some(wake_set));
@@ -81,7 +81,7 @@ pub fn install() {
 }
 
 struct ComDeviceDriver {
-    serial: SerialPort,
+    port_index: usize,
     next_instance: AtomicU32,
     open_instances: BTreeMap<u32, OpenFile>,
 
@@ -98,12 +98,9 @@ struct PendingRead {
 }
 
 impl ComDeviceDriver {
-    pub fn new(port: u16) -> Self {
-        let serial = SerialPort::new(port);
-        serial.init();
-
+    pub fn new(port_index: usize) -> Self {
         Self {
-            serial,
+            port_index,
             next_instance: AtomicU32::new(1),
             open_instances: BTreeMap::new(),
             read_list: VecDeque::new(),
@@ -133,13 +130,10 @@ impl ComDeviceDriver {
                 }
             }
             DriverCommand::Write => {
-                let buffer_ptr = message.args[1] as *mut u8;
+                let buffer_ptr = message.args[1] as *const u8;
                 let buffer_len = message.args[2] as usize;
-                for i in 0..buffer_len {
-                    unsafe {
-                        self.serial.send_byte(*buffer_ptr.add(i));
-                    }
-                }
+                let data = unsafe { core::slice::from_raw_parts(buffer_ptr, buffer_len) };
+                with_port(self.port_index, |port| port.push(data));
                 Some(Ok(buffer_len as u32))
             }
             _ => Some(Err(IoError::UnsupportedOperation)),
@@ -152,7 +146,8 @@ impl ComDeviceDriver {
             None => return None,
         };
         while first.written < first.buffer_len {
-            match self.serial.read_byte() {
+            let byte = with_port(self.port_index, |port| port.read_byte()).flatten();
+            match byte {
                 Some(byte) => {
                     unsafe {
                         let ptr = first.buffer_ptr.add(first.written);
